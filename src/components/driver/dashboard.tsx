@@ -26,7 +26,7 @@ import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
 import { Capacitor } from '@capacitor/core';
-import { addBackgroundWatcher, removeBackgroundWatcher } from '@/lib/capacitor-geolocation';
+import { addBackgroundWatcher, removeBackgroundWatcher, requestLocationPermissions } from '@/lib/capacitor-geolocation';
 
 export function DriverDashboard() {
   const { user, driverData, logout } = useAuth();
@@ -168,6 +168,19 @@ export function DriverDashboard() {
   const startBroadcast = useCallback(async () => {
     const isNative = Capacitor.isNativePlatform();
     
+    if (isNative) {
+      // Explicitly request permission before starting watcher to ensure dialog appears
+      const status = await requestLocationPermissions();
+      if (status?.location !== 'granted') {
+        toast({
+          title: "Permission Required",
+          description: "Location access is needed to broadcast telemetry.",
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+
     setIsBroadcasting(true);
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
 

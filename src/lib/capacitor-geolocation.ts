@@ -20,9 +20,9 @@ export async function addBackgroundWatcher(
 
   try {
     if (typeof window !== 'undefined') {
-      // Use any to bypass strict type checking for the dynamic import which can be finicky during build
-      const mod = (await import('@capacitor-community/background-geolocation')) as any;
-      const BackgroundGeolocation = mod.BackgroundGeolocation || mod.default;
+      const mod = await import('@capacitor-community/background-geolocation');
+      // Bypassing strict named export check for build-time safety
+      const BackgroundGeolocation = (mod as any).BackgroundGeolocation || (mod as any).default?.BackgroundGeolocation;
       
       if (!BackgroundGeolocation) {
         throw new Error('BackgroundGeolocation plugin not found in module');
@@ -42,8 +42,8 @@ export async function removeBackgroundWatcher(id: string) {
 
   try {
     if (typeof window !== 'undefined') {
-      const mod = (await import('@capacitor-community/background-geolocation')) as any;
-      const BackgroundGeolocation = mod.BackgroundGeolocation || mod.default;
+      const mod = await import('@capacitor-community/background-geolocation');
+      const BackgroundGeolocation = (mod as any).BackgroundGeolocation || (mod as any).default?.BackgroundGeolocation;
       
       if (BackgroundGeolocation) {
         await BackgroundGeolocation.removeWatcher({ id });
@@ -51,5 +51,17 @@ export async function removeBackgroundWatcher(id: string) {
     }
   } catch (err) {
     console.error('Failed to remove Background Geolocation watcher:', err);
+  }
+}
+
+export async function requestLocationPermissions() {
+  if (!Capacitor.isNativePlatform()) return;
+  
+  try {
+    const { Geolocation } = await import('@capacitor/geolocation');
+    const status = await Geolocation.requestPermissions();
+    return status;
+  } catch (err) {
+    console.error('Failed to request location permissions:', err);
   }
 }
