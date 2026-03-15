@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core';
 
 /**
  * Dynamically loads and interacts with the Capacitor Geolocation plugins.
- * Uses @ts-ignore and dynamic imports to prevent build-time failures during Next.js SSR/Static generation.
+ * Uses "as any" and dynamic imports to prevent build-time failures during Next.js SSR/Static generation.
  */
 
 export async function addBackgroundWatcher(
@@ -22,7 +22,6 @@ export async function addBackgroundWatcher(
   try {
     if (typeof window !== 'undefined') {
       // Use "as any" to bypass build-time type checking for native modules
-      // @ts-ignore
       const mod = (await import('@capacitor-community/background-geolocation')) as any;
       const BackgroundGeolocation = mod.BackgroundGeolocation || mod.default?.BackgroundGeolocation;
       
@@ -44,7 +43,6 @@ export async function removeBackgroundWatcher(id: string) {
 
   try {
     if (typeof window !== 'undefined') {
-      // @ts-ignore
       const mod = (await import('@capacitor-community/background-geolocation')) as any;
       const BackgroundGeolocation = mod.BackgroundGeolocation || mod.default?.BackgroundGeolocation;
       
@@ -61,7 +59,6 @@ export async function requestLocationPermissions() {
   if (!Capacitor.isNativePlatform()) return null;
   
   try {
-    // @ts-ignore
     const mod = (await import('@capacitor/geolocation')) as any;
     const Geolocation = mod.Geolocation || mod.default?.Geolocation;
     
