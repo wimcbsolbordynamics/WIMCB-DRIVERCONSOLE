@@ -13,7 +13,7 @@
     "static": "next build",
     "cap:sync": "npx cap sync",
     "cap:build": "npm run static && npx cap sync",
-    "build:apk": "npm run build && npx cap sync && cd android && ./gradlew assembleDebug"
+    "build:apk": "npm run static && npx cap sync && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
     "@capacitor-community/background-geolocation": "^1.2.26",
