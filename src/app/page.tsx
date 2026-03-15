@@ -1,11 +1,27 @@
 "use client";
 
+import dynamic from 'next/dynamic';
 import { useAuth } from '@/context/auth-context';
-import { DriverDashboard } from '@/components/driver/dashboard';
 import { DriverLogin } from '@/components/driver/login';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ShieldAlert, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+
+// Dynamically import Dashboard to avoid Capacitor module resolution issues during SSR
+const DriverDashboard = dynamic(
+  () => import('@/components/driver/dashboard').then((mod) => mod.DriverDashboard),
+  { 
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <p className="font-code text-sm font-bold tracking-widest text-primary uppercase">Loading Command...</p>
+        </div>
+      </div>
+    )
+  }
+);
 
 export default function Home() {
   const { user, driverData, loading, logout } = useAuth();
@@ -25,7 +41,6 @@ export default function Home() {
     return <DriverLogin />;
   }
 
-  // Verification step
   if (user && !driverData) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
