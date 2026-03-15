@@ -12,11 +12,11 @@
     "typecheck": "tsc --noEmit",
     "static": "next build",
     "cap:sync": "npx cap sync",
-    "cap:build": "npm run build && npx cap sync",
+    "cap:build": "npm run static && npx cap sync",
     "build:apk": "npm run build && npx cap sync && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
-    "@capacitor-community/background-geolocation": "^1.2.18",
+    "@capacitor-community/background-geolocation": "^1.2.26",
     "@capacitor/android": "^6.2.0",
     "@capacitor/cli": "^6.2.0",
     "@capacitor/core": "^6.2.0",
