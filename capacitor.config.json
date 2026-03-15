@@ -1,0 +1,8 @@
+{
+  "appId": "com.wimcb.driver",
+  "appName": "WIMCB Driver",
+  "webDir": "out",
+  "server": {
+    "androidScheme": "https"
+  }
+}
