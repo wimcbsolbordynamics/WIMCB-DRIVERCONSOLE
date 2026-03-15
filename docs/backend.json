@@ -1,0 +1,72 @@
+
+{
+  "entities": {
+    "DriverInfo": {
+      "title": "Driver Info",
+      "description": "Assigned bus information for a verified driver.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "busNumber": { "type": "string" }
+      },
+      "required": ["email", "busNumber"]
+    },
+    "BrandingSettings": {
+      "title": "Branding Settings",
+      "description": "Fleet-wide settings including the verified drivers list.",
+      "type": "object",
+      "properties": {
+        "verifiedDrivers": {
+          "type": "array",
+          "items": { "$ref": "#/backend/entities/DriverInfo" }
+        }
+      }
+    },
+    "Bus": {
+      "title": "Bus",
+      "description": "Fleet vehicle status and settings.",
+      "type": "object",
+      "properties": {
+        "allow_crowdsourcing": { "type": "boolean", "description": "Whether crowdsourced signals are accepted." }
+      }
+    },
+    "Signal": {
+      "title": "Signal",
+      "description": "Real-time telemetry data broadcast by a driver.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "bus_id": { "type": "string" },
+        "bus_number": { "type": "string" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" }
+          }
+        },
+        "speed": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "timestamp": { "type": "string" }
+      }
+    }
+  },
+  "auth": {
+    "providers": ["password"]
+  },
+  "firestore": {
+    "/settings/branding": {
+      "schema": "BrandingSettings",
+      "description": "Global branding and driver verification settings."
+    },
+    "/buses/{busId}": {
+      "schema": "Bus",
+      "description": "Bus configuration and authority status."
+    },
+    "/buses/{busId}/signals/{authUid}": {
+      "schema": "Signal",
+      "description": "Telemetry signal from an official driver."
+    }
+  }
+}

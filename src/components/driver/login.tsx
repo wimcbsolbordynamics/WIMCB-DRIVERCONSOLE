@@ -1,8 +1,9 @@
-"use client";
+
+'use client';
 
 import React, { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { useAuth as useFirebaseStore } from '@/firebase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -10,6 +11,7 @@ import { Bus, ShieldCheck, Mail, Lock } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 export function DriverLogin() {
+  const auth = useFirebaseStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);

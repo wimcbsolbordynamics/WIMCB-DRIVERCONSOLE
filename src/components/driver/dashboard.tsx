@@ -1,29 +1,29 @@
-"use client";
+
+'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/auth-context';
+import { useFirestore } from '@/firebase';
 import { doc, setDoc, deleteDoc, serverTimestamp, updateDoc, getDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { 
   Radio, 
   MapPin, 
   Navigation, 
-  Settings, 
   LogOut, 
   Signal, 
   Users, 
   ShieldCheck,
-  AlertTriangle,
-  Zap
+  Zap,
+  Bus
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 export function DriverDashboard() {
   const { user, driverData, logout } = useAuth();
+  const db = useFirestore();
   const { toast } = useToast();
   
   const [isBroadcasting, setIsBroadcasting] = useState(false);
@@ -39,7 +39,6 @@ export function DriverDashboard() {
   
   const watchId = useRef<number | null>(null);
 
-  // Fetch initial authority toggle state
   useEffect(() => {
     if (driverData?.busNumber) {
       const fetchBusSettings = async () => {
@@ -51,17 +50,17 @@ export function DriverDashboard() {
       };
       fetchBusSettings();
     }
-  }, [driverData]);
+  }, [driverData, db]);
 
   const cleanupSignal = useCallback(async () => {
     if (user && driverData) {
       try {
         await deleteDoc(doc(db, 'buses', driverData.busNumber, 'signals', user.uid));
       } catch (e) {
-        console.error("Cleanup failed", e);
+        // Silently fail cleanup
       }
     }
-  }, [user, driverData]);
+  }, [user, driverData, db]);
 
   const updateAuthority = async (val: boolean) => {
     if (!driverData) return;
@@ -80,7 +79,7 @@ export function DriverDashboard() {
   };
 
   const startBroadcast = useCallback(() => {
-    if (!navigator.geolocation) {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
       toast({ title: "GPS Not Supported", variant: "destructive" });
       return;
     }
@@ -88,7 +87,7 @@ export function DriverDashboard() {
     setIsBroadcasting(true);
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
 
-    watchId.current = navigator.geolocation.watchPosition(
+    watchId.current = window.navigator.geolocation.watchPosition(
       async (pos) => {
         const speedKmh = pos.coords.speed ? (pos.coords.speed * 3.6).toFixed(1) : "0.0";
         
@@ -103,23 +102,19 @@ export function DriverDashboard() {
         setTelemetry(currentTelemetry);
 
         if (user && driverData) {
-          try {
-            await setDoc(doc(db, 'buses', driverData.busNumber, 'signals', user.uid), {
-              uid: user.uid,
-              email: user.email,
-              bus_id: driverData.busNumber,
-              bus_number: driverData.busNumber,
-              location: {
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude
-              },
-              speed: parseFloat(speedKmh),
-              accuracy: pos.coords.accuracy,
-              timestamp: serverTimestamp()
-            });
-          } catch (error) {
-            console.error("Signal write failed", error);
-          }
+          setDoc(doc(db, 'buses', driverData.busNumber, 'signals', user.uid), {
+            uid: user.uid,
+            email: user.email,
+            bus_id: driverData.busNumber,
+            bus_number: driverData.busNumber,
+            location: {
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude
+            },
+            speed: parseFloat(speedKmh),
+            accuracy: pos.coords.accuracy,
+            timestamp: serverTimestamp()
+          });
         }
       },
       (err) => {
@@ -128,7 +123,7 @@ export function DriverDashboard() {
       },
       { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
     );
-  }, [user, driverData, toast]);
+  }, [user, driverData, db, toast]);
 
   const stopBroadcast = useCallback(() => {
     if (watchId.current !== null) {
@@ -156,7 +151,6 @@ export function DriverDashboard() {
 
   return (
     <div className="flex flex-col min-h-screen max-w-lg mx-auto p-4 space-y-4">
-      {/* Header Info */}
       <div className="flex items-center justify-between pt-2 px-2">
         <div className="flex items-center gap-2">
           <div className={`h-2.5 w-2.5 rounded-full animate-pulse ${isBroadcasting ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.8)]' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'}`} />
@@ -169,7 +163,6 @@ export function DriverDashboard() {
         </Button>
       </div>
 
-      {/* Driver Identity Card */}
       <Card className="command-card overflow-hidden">
         <CardContent className="p-6">
           <div className="flex items-start justify-between">
@@ -184,9 +177,7 @@ export function DriverDashboard() {
         </CardContent>
       </Card>
 
-      {/* Main Controls */}
       <div className="grid grid-cols-1 gap-4">
-        {/* Authority Toggle */}
         <Card className="command-card">
           <CardContent className="p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -206,7 +197,6 @@ export function DriverDashboard() {
           </CardContent>
         </Card>
 
-        {/* Telemetry Dashboard */}
         <div className="grid grid-cols-2 gap-4">
           <Card className="command-card">
             <CardContent className="p-4 flex flex-col items-center justify-center space-y-2">
@@ -229,7 +219,6 @@ export function DriverDashboard() {
           </Card>
         </div>
 
-        {/* Location Display */}
         <Card className="command-card">
           <CardContent className="p-4 space-y-2">
             <div className="flex items-center gap-2 text-muted-foreground">
@@ -247,7 +236,6 @@ export function DriverDashboard() {
 
       <div className="flex-1" />
 
-      {/* Massive Toggle Button */}
       <div className="pb-6">
         <Button 
           className={`w-full h-24 text-2xl font-black rounded-2xl transition-all duration-300 transform active:scale-95 shadow-2xl uppercase tracking-tighter ${
@@ -271,7 +259,6 @@ export function DriverDashboard() {
         </Button>
       </div>
       
-      {/* Footer Info */}
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
         <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">WIMCB Official Driver Terminal v2.1</p>
       </div>

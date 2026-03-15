@@ -1,9 +1,10 @@
-"use client";
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, User, signOut } from 'firebase/auth';
+'use client';
+
+import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import { User, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
+import { useUser, useFirestore, useAuth as useFirebaseAuth } from '@/firebase';
 
 interface DriverData {
   busNumber: string;
@@ -20,21 +21,24 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const { user, loading: userLoading } = useUser();
+  const db = useFirestore();
+  const auth = useFirebaseAuth();
+  
   const [driverData, setDriverData] = useState<DriverData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      
-      if (currentUser && currentUser.email) {
+    if (userLoading) return;
+
+    const verifyDriver = async () => {
+      if (user?.email) {
         try {
           const brandingDoc = await getDoc(doc(db, 'settings', 'branding'));
           if (brandingDoc.exists()) {
             const data = brandingDoc.data();
             const verifiedDrivers = data.verifiedDrivers || [];
-            const driverInfo = verifiedDrivers.find((d: any) => d.email === currentUser.email);
+            const driverInfo = verifiedDrivers.find((d: any) => d.email === user.email);
             
             if (driverInfo) {
               setDriverData({
@@ -46,24 +50,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
           }
         } catch (error) {
-          console.error("Error verifying driver:", error);
           setDriverData(null);
         }
       } else {
         setDriverData(null);
       }
       setLoading(false);
-    });
+    };
 
-    return () => unsubscribe();
-  }, []);
+    verifyDriver();
+  }, [user, userLoading, db]);
 
   const logout = async () => {
     await signOut(auth);
   };
 
+  const value = useMemo(() => ({
+    user,
+    driverData,
+    loading: userLoading || loading,
+    logout
+  }), [user, driverData, userLoading, loading]);
+
   return (
-    <AuthContext.Provider value={{ user, driverData, loading, logout }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
