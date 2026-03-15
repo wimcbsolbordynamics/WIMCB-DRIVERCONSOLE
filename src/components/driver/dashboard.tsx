@@ -169,7 +169,6 @@ export function DriverDashboard() {
     const isNative = Capacitor.isNativePlatform();
     
     if (isNative) {
-      // Explicitly request permission before starting watcher to ensure dialog appears
       const status = await requestLocationPermissions();
       if (status?.location !== 'granted') {
         toast({
