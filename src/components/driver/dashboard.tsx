@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -24,7 +25,7 @@ import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
 import { Capacitor } from '@capacitor/core';
-import { BackgroundGeolocation } from '@capacitor-community/background-geolocation';
+import { addBackgroundWatcher, removeBackgroundWatcher } from '@/lib/capacitor-geolocation';
 
 export function DriverDashboard() {
   const { user, driverData, logout } = useAuth();
@@ -81,7 +82,6 @@ export function DriverDashboard() {
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busNumber);
     
-    // Using setDoc with merge to ensure the doc exists
     setDoc(busRef, {
       allow_crowdsourcing: val,
       bus_number: driverData.busNumber,
@@ -98,7 +98,6 @@ export function DriverDashboard() {
         requestResourceData: { allow_crowdsourcing: val }
       });
       errorEmitter.emit('permission-error', permissionError);
-      toast({ title: "Failed to update authority", variant: "destructive" });
     }).finally(() => {
       setSyncing(false);
     });
@@ -132,6 +131,20 @@ export function DriverDashboard() {
     }
   }, [user, driverData, db]);
 
+  const stopBroadcast = useCallback(async () => {
+    if (watchId.current !== null) {
+      if (Capacitor.isNativePlatform()) {
+        await removeBackgroundWatcher(watchId.current as string);
+      } else {
+        navigator.geolocation.clearWatch(watchId.current as number);
+      }
+      watchId.current = null;
+    }
+    setIsBroadcasting(false);
+    setTelemetry(prev => ({ ...prev, status: 'OFFLINE' }));
+    cleanupSignal();
+  }, [cleanupSignal]);
+
   const startBroadcast = useCallback(async () => {
     const isNative = Capacitor.isNativePlatform();
     setIsBroadcasting(true);
@@ -139,7 +152,7 @@ export function DriverDashboard() {
 
     if (isNative) {
       try {
-        const id = await BackgroundGeolocation.addWatcher(
+        const id = await addBackgroundWatcher(
           {
             backgroundMessage: "WIMCB Driver is broadcasting telemetry in the background.",
             backgroundTitle: "Fleet Sync Active",
@@ -148,18 +161,7 @@ export function DriverDashboard() {
             distanceFilter: 5 // meters
           },
           (location, error) => {
-            if (error) {
-              if (error.code === "NOT_AUTHORIZED") {
-                toast({ 
-                  title: "Permission Required", 
-                  description: "Background location permission is required for transit sync.",
-                  variant: "destructive"
-                });
-                BackgroundGeolocation.openSettings();
-              }
-              return;
-            }
-
+            if (error) return;
             if (location) {
               const speedKmh = location.speed ? parseFloat((location.speed * 3.6).toFixed(1)) : 0;
               setTelemetry({
@@ -173,13 +175,17 @@ export function DriverDashboard() {
             }
           }
         );
-        watchId.current = id;
+        
+        if (id) {
+          watchId.current = id;
+        } else {
+          setIsBroadcasting(false);
+        }
       } catch (err: any) {
         toast({ title: "Native Tracking Error", description: err.message, variant: "destructive" });
         setIsBroadcasting(false);
       }
     } else {
-      // Browser fallback
       if (!navigator.geolocation) {
         toast({ title: "GPS Not Supported", variant: "destructive" });
         setIsBroadcasting(false);
@@ -205,27 +211,13 @@ export function DriverDashboard() {
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     }
-  }, [updateFirebaseTelemetry, toast]);
-
-  const stopBroadcast = useCallback(() => {
-    if (watchId.current !== null) {
-      if (Capacitor.isNativePlatform()) {
-        BackgroundGeolocation.removeWatcher({ id: watchId.current as string });
-      } else {
-        navigator.geolocation.clearWatch(watchId.current as number);
-      }
-      watchId.current = null;
-    }
-    setIsBroadcasting(false);
-    setTelemetry(prev => ({ ...prev, status: 'OFFLINE' }));
-    cleanupSignal();
-  }, [cleanupSignal]);
+  }, [updateFirebaseTelemetry, toast, stopBroadcast]);
 
   useEffect(() => {
     return () => {
       if (watchId.current !== null) {
         if (Capacitor.isNativePlatform()) {
-          BackgroundGeolocation.removeWatcher({ id: watchId.current as string });
+          removeBackgroundWatcher(watchId.current as string);
         } else {
           navigator.geolocation.clearWatch(watchId.current as number);
         }
@@ -234,7 +226,7 @@ export function DriverDashboard() {
   }, []);
 
   const handleLogout = async () => {
-    stopBroadcast();
+    await stopBroadcast();
     await logout();
   };
 
@@ -368,7 +360,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.5 Native Optimized</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.5 Background Optimized</p>
       </div>
     </div>
   );
