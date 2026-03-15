@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -21,7 +20,8 @@ import {
   AlertTriangle,
   Activity,
   Wifi,
-  WifiOff
+  WifiOff,
+  CloudLightning
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
@@ -285,9 +285,9 @@ export function DriverDashboard() {
         </div>
         <div className="flex items-center gap-2">
           {isBroadcasting && (
-            <div className="flex items-center gap-1 text-[10px] font-bold text-primary mr-2">
-              <Activity className="h-3 w-3" />
-              <span>SYNCING</span>
+            <div className={`flex items-center gap-1 text-[10px] font-bold mr-2 ${isOnline ? 'text-primary' : 'text-destructive'}`}>
+              <CloudLightning className="h-3 w-3" />
+              <span>{isOnline ? 'CLOUD SYNC' : 'SYNC FAILED'}</span>
             </div>
           )}
           <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-white">
@@ -297,12 +297,11 @@ export function DriverDashboard() {
       </div>
 
       {!isOnline && (
-        <Card className="bg-destructive/10 border-destructive/50 border-dashed">
+        <Card className="bg-destructive/10 border-destructive/50 border-dashed animate-pulse">
           <CardContent className="p-3 flex items-center gap-3 text-destructive">
             <WifiOff className="h-5 w-5 shrink-0" />
-            <p className="text-xs font-semibold leading-tight">
-              INTERNET DISCONNECTED. Telemetry cannot reach the fleet server. 
-              Please check your data connection.
+            <p className="text-xs font-bold leading-tight uppercase tracking-tight">
+              INTERNET LOST. The fleet cannot see your position. Move to a high-signal area immediately.
             </p>
           </CardContent>
         </Card>
@@ -416,7 +415,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.6 Native Optimized</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.7 Permissions Optimized</p>
       </div>
     </div>
   );
