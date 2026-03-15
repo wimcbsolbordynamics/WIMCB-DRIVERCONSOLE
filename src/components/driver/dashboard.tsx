@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { useFirestore } from '@/firebase';
-import { doc, setDoc, deleteDoc, serverTimestamp, updateDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, serverTimestamp, updateDoc, onSnapshot } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
@@ -17,9 +17,12 @@ import {
   Users, 
   ShieldCheck,
   Zap,
-  Bus
+  Bus,
+  AlertTriangle
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
 export function DriverDashboard() {
   const { user, driverData, logout } = useAuth();
@@ -41,41 +44,55 @@ export function DriverDashboard() {
 
   useEffect(() => {
     if (driverData?.busNumber) {
-      const fetchBusSettings = async () => {
-        const busRef = doc(db, 'buses', driverData.busNumber);
-        const busDoc = await getDoc(busRef);
-        if (busDoc.exists()) {
-          setAllowCrowdsourcing(busDoc.data().allow_crowdsourcing ?? true);
+      const busRef = doc(db, 'buses', driverData.busNumber);
+      const unsubscribe = onSnapshot(busRef, (snapshot) => {
+        if (snapshot.exists()) {
+          setAllowCrowdsourcing(snapshot.data().allow_crowdsourcing ?? true);
         }
-      };
-      fetchBusSettings();
+      }, (err) => {
+        const permissionError = new FirestorePermissionError({
+          path: busRef.path,
+          operation: 'get'
+        });
+        errorEmitter.emit('permission-error', permissionError);
+      });
+      return () => unsubscribe();
     }
   }, [driverData, db]);
 
   const cleanupSignal = useCallback(async () => {
     if (user && driverData) {
-      try {
-        await deleteDoc(doc(db, 'buses', driverData.busNumber, 'signals', user.uid));
-      } catch (e) {
-        // Silently fail cleanup
-      }
+      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+      deleteDoc(signalRef).catch(async () => {
+        const permissionError = new FirestorePermissionError({
+          path: signalRef.path,
+          operation: 'delete'
+        });
+        errorEmitter.emit('permission-error', permissionError);
+      });
     }
   }, [user, driverData, db]);
 
   const updateAuthority = async (val: boolean) => {
     if (!driverData) return;
     setSyncing(true);
-    try {
-      await updateDoc(doc(db, 'buses', driverData.busNumber), {
-        allow_crowdsourcing: val
+    const busRef = doc(db, 'buses', driverData.busNumber);
+    
+    updateDoc(busRef, {
+      allow_crowdsourcing: val
+    }).then(() => {
+      toast({ title: val ? "Crowdsourcing Restored" : "Exclusive Command Active" });
+    }).catch(async () => {
+      const permissionError = new FirestorePermissionError({
+        path: busRef.path,
+        operation: 'update',
+        requestResourceData: { allow_crowdsourcing: val }
       });
-      setAllowCrowdsourcing(val);
-      toast({ title: val ? "Crowdsourcing Enabled" : "Full Authority Mode Active" });
-    } catch (e) {
+      errorEmitter.emit('permission-error', permissionError);
       toast({ title: "Failed to update authority", variant: "destructive" });
-    } finally {
+    }).finally(() => {
       setSyncing(false);
-    }
+    });
   };
 
   const startBroadcast = useCallback(() => {
@@ -88,7 +105,7 @@ export function DriverDashboard() {
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
 
     watchId.current = window.navigator.geolocation.watchPosition(
-      async (pos) => {
+      (pos) => {
         const speedKmh = pos.coords.speed ? (pos.coords.speed * 3.6).toFixed(1) : "0.0";
         
         const currentTelemetry = {
@@ -102,7 +119,8 @@ export function DriverDashboard() {
         setTelemetry(currentTelemetry);
 
         if (user && driverData) {
-          setDoc(doc(db, 'buses', driverData.busNumber, 'signals', user.uid), {
+          const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+          const signalData = {
             uid: user.uid,
             email: user.email,
             bus_id: driverData.busNumber,
@@ -114,6 +132,15 @@ export function DriverDashboard() {
             speed: parseFloat(speedKmh),
             accuracy: pos.coords.accuracy,
             timestamp: serverTimestamp()
+          };
+
+          setDoc(signalRef, signalData, { merge: true }).catch(async () => {
+            const permissionError = new FirestorePermissionError({
+              path: signalRef.path,
+              operation: 'write',
+              requestResourceData: signalData
+            });
+            errorEmitter.emit('permission-error', permissionError);
           });
         }
       },
@@ -162,6 +189,17 @@ export function DriverDashboard() {
           <LogOut className="h-5 w-5" />
         </Button>
       </div>
+
+      {!driverData?.masterBroadcastEnabled && (
+        <Card className="bg-amber-500/10 border-amber-500/50">
+          <CardContent className="p-3 flex items-center gap-3 text-amber-500">
+            <AlertTriangle className="h-5 w-5 shrink-0" />
+            <p className="text-xs font-semibold leading-tight">
+              Global Master Broadcast is currently DISABLED. Your signal may be ignored by student trackers.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="command-card overflow-hidden">
         <CardContent className="p-6">

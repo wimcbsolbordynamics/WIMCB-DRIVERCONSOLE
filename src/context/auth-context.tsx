@@ -3,12 +3,13 @@
 
 import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
 import { User, signOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { useUser, useFirestore, useAuth as useFirebaseAuth } from '@/firebase';
 
 interface DriverData {
   busNumber: string;
   verified: boolean;
+  masterBroadcastEnabled: boolean;
 }
 
 interface AuthContextType {
@@ -31,34 +32,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (userLoading) return;
 
-    const verifyDriver = async () => {
-      if (user?.email) {
-        try {
-          const brandingDoc = await getDoc(doc(db, 'settings', 'branding'));
-          if (brandingDoc.exists()) {
-            const data = brandingDoc.data();
-            const verifiedDrivers = data.verifiedDrivers || [];
-            const driverInfo = verifiedDrivers.find((d: any) => d.email === user.email);
-            
-            if (driverInfo) {
-              setDriverData({
-                busNumber: driverInfo.busNumber,
-                verified: true
-              });
-            } else {
-              setDriverData(null);
-            }
-          }
-        } catch (error) {
+    if (!user?.email) {
+      setDriverData(null);
+      setLoading(false);
+      return;
+    }
+
+    // Use a listener for settings so we get real-time updates for masterBroadcastEnabled
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'branding'), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        const verifiedDrivers = data.verifiedDrivers || [];
+        const masterEnabled = data.masterBroadcastEnabled ?? false;
+        
+        const userEmail = user.email!.toLowerCase();
+        const driverInfo = verifiedDrivers.find((d: any) => 
+          d.email.toLowerCase() === userEmail
+        );
+        
+        if (driverInfo) {
+          setDriverData({
+            busNumber: driverInfo.busNumber,
+            verified: true,
+            masterBroadcastEnabled: masterEnabled
+          });
+        } else {
           setDriverData(null);
         }
       } else {
         setDriverData(null);
       }
       setLoading(false);
-    };
+    }, (error) => {
+      console.error("Error fetching branding settings:", error);
+      setLoading(false);
+    });
 
-    verifyDriver();
+    return () => unsubscribe();
   }, [user, userLoading, db]);
 
   const logout = async () => {

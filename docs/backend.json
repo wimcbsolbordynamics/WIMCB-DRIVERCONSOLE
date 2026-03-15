@@ -19,6 +19,10 @@
         "verifiedDrivers": {
           "type": "array",
           "items": { "$ref": "#/backend/entities/DriverInfo" }
+        },
+        "masterBroadcastEnabled": {
+          "type": "boolean",
+          "description": "Global toggle to enable/disable official driver signal processing."
         }
       }
     },
@@ -27,6 +31,7 @@
       "description": "Fleet vehicle status and settings.",
       "type": "object",
       "properties": {
+        "bus_number": { "type": "string" },
         "allow_crowdsourcing": { "type": "boolean", "description": "Whether crowdsourced signals are accepted." }
       }
     },
