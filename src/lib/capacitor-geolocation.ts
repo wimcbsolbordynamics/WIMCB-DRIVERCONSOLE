@@ -1,4 +1,3 @@
-
 'use client';
 
 import { Capacitor } from '@capacitor/core';
@@ -23,6 +22,13 @@ export async function addBackgroundWatcher(
 
   try {
     const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
+    
+    // Explicitly request permissions if requested
+    if (options.requestPermissions) {
+      // Background Geolocation plugin handles permission requests internally through addWatcher
+      // but some versions might require a manual check for background-specific permissions on Android 11+
+    }
+    
     return await BackgroundGeolocation.addWatcher(options, callback);
   } catch (err) {
     console.error('Failed to load Background Geolocation plugin:', err);

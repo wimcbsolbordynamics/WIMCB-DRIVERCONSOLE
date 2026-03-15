@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -19,7 +18,8 @@ import {
   Zap,
   Bus as BusIcon,
   AlertTriangle,
-  Activity
+  Activity,
+  Settings as SettingsIcon
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
@@ -82,6 +82,7 @@ export function DriverDashboard() {
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busNumber);
     
+    // Use setDoc with merge to ensure the bus config exists
     setDoc(busRef, {
       allow_crowdsourcing: val,
       bus_number: driverData.busNumber,
@@ -147,11 +148,15 @@ export function DriverDashboard() {
 
   const startBroadcast = useCallback(async () => {
     const isNative = Capacitor.isNativePlatform();
+    
+    // UI feedback for start
     setIsBroadcasting(true);
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
 
     if (isNative) {
       try {
+        // The addBackgroundWatcher will request standard location permissions.
+        // For Android Background Geolocation ("Always Allow"), the OS often requires a manual toggle.
         const id = await addBackgroundWatcher(
           {
             backgroundMessage: "WIMCB Driver is broadcasting telemetry in the background.",
@@ -161,7 +166,10 @@ export function DriverDashboard() {
             distanceFilter: 5 // meters
           },
           (location, error) => {
-            if (error) return;
+            if (error) {
+              console.error('Location Error:', error);
+              return;
+            }
             if (location) {
               const speedKmh = location.speed ? parseFloat((location.speed * 3.6).toFixed(1)) : 0;
               setTelemetry({
@@ -178,14 +186,24 @@ export function DriverDashboard() {
         
         if (id) {
           watchId.current = id;
+          toast({
+            title: "Transmission Started",
+            description: "Background tracking is active. Ensure 'Always Allow' is set in settings."
+          });
         } else {
           setIsBroadcasting(false);
+          toast({ 
+            title: "Startup Failed", 
+            description: "Could not initialize native tracking.", 
+            variant: "destructive" 
+          });
         }
       } catch (err: any) {
         toast({ title: "Native Tracking Error", description: err.message, variant: "destructive" });
         setIsBroadcasting(false);
       }
     } else {
+      // Browser environment
       if (!navigator.geolocation) {
         toast({ title: "GPS Not Supported", variant: "destructive" });
         setIsBroadcasting(false);
@@ -258,6 +276,20 @@ export function DriverDashboard() {
             <AlertTriangle className="h-5 w-5 shrink-0" />
             <p className="text-xs font-semibold leading-tight">
               Global Master Broadcast is DISABLED. Tracking signals will be ignored by student apps.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {Capacitor.isNativePlatform() && (
+        <Card className="bg-primary/5 border-primary/20">
+          <CardContent className="p-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-primary">
+              <SettingsIcon className="h-4 w-4" />
+              <p className="text-[10px] font-bold uppercase tracking-wider">Background Config</p>
+            </div>
+            <p className="text-[10px] text-muted-foreground italic">
+              Set location to "Allow all the time" in app settings.
             </p>
           </CardContent>
         </Card>
