@@ -10,7 +10,7 @@
         android:theme="@style/AppTheme">
 
         <activity
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|locale|uiMode"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
@@ -35,7 +35,7 @@
         </provider>
 
         <service
-            android:name="com.capacitorcommunity.backgroundgeolocation.BackgroundGeolocationService"
+            android:name="com.equimaps.capacitor_background_geolocation.BackgroundGeolocationService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />

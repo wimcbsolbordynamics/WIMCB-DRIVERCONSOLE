@@ -4,7 +4,6 @@ import { Capacitor } from '@capacitor/core';
 
 /**
  * Dynamically loads and interacts with the Capacitor Background Geolocation plugin.
- * This implementation prevents build-time module resolution errors by using runtime imports and type bypassing.
  */
 
 export async function addBackgroundWatcher(
