@@ -18,7 +18,6 @@ import {
   Zap,
   Bus as BusIcon,
   AlertTriangle,
-  Activity,
   Wifi,
   WifiOff,
   CloudLightning
