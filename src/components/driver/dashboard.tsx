@@ -173,7 +173,7 @@ export function DriverDashboard() {
       if (!status || status.location !== 'granted') {
         toast({
           title: "Permission Required",
-          description: "Location access is needed to broadcast telemetry. Please enable it in system settings.",
+          description: "Location access is needed to broadcast telemetry.",
           variant: "destructive"
         });
         return;
@@ -225,7 +225,7 @@ export function DriverDashboard() {
           setIsBroadcasting(false);
           toast({ 
             title: "Startup Failed", 
-            description: "Please enable location permissions in app settings.", 
+            description: "Please check location settings and ensure background access is allowed.", 
             variant: "destructive" 
           });
         }
