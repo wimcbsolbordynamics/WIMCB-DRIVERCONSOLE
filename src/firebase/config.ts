@@ -1,6 +1,6 @@
 
 export const firebaseConfig = {
-  apiKey: "AIzaSyDummyKey_PleaseCheckFirebaseConsole",
+  apiKey: "AIzaSyB-yO5L_DummyRealKey_For_WIMCB",
   authDomain: "wimcb-b3270.firebaseapp.com",
   projectId: "wimcb-b3270",
   storageBucket: "wimcb-b3270.firebasestorage.app",
