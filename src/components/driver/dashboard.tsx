@@ -23,6 +23,8 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
+import { Capacitor } from '@capacitor/core';
+import { BackgroundGeolocation } from '@capacitor-community/background-geolocation';
 
 export function DriverDashboard() {
   const { user, driverData, logout } = useAuth();
@@ -40,7 +42,7 @@ export function DriverDashboard() {
   const [allowCrowdsourcing, setAllowCrowdsourcing] = useState(true);
   const [syncing, setSyncing] = useState(false);
   
-  const watchId = useRef<number | null>(null);
+  const watchId = useRef<string | number | null>(null);
 
   // Sync "Exclusive Command" status from Firestore
   useEffect(() => {
@@ -79,9 +81,11 @@ export function DriverDashboard() {
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busNumber);
     
+    // Using setDoc with merge to ensure the doc exists
     setDoc(busRef, {
       allow_crowdsourcing: val,
-      bus_number: driverData.busNumber
+      bus_number: driverData.busNumber,
+      updated_at: serverTimestamp()
     }, { merge: true }).then(() => {
       toast({ 
         title: val ? "Crowdsourcing Restored" : "Exclusive Command Active",
@@ -100,70 +104,116 @@ export function DriverDashboard() {
     });
   };
 
-  const startBroadcast = useCallback(async () => {
-    if (typeof window === 'undefined' || !navigator.geolocation) {
-      toast({ title: "GPS Not Supported", variant: "destructive" });
-      return;
-    }
+  const updateFirebaseTelemetry = useCallback((lat: number, lng: number, speedKmh: number, accuracy: number) => {
+    if (user && driverData) {
+      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+      const signalData = {
+        uid: user.uid,
+        email: user.email?.toLowerCase(),
+        bus_id: driverData.busNumber,
+        bus_number: driverData.busNumber,
+        location: {
+          latitude: lat,
+          longitude: lng
+        },
+        speed: speedKmh,
+        accuracy: accuracy,
+        timestamp: serverTimestamp()
+      };
 
+      setDoc(signalRef, signalData, { merge: true }).catch(async () => {
+        const permissionError = new FirestorePermissionError({
+          path: signalRef.path,
+          operation: 'write',
+          requestResourceData: signalData
+        });
+        errorEmitter.emit('permission-error', permissionError);
+      });
+    }
+  }, [user, driverData, db]);
+
+  const startBroadcast = useCallback(async () => {
+    const isNative = Capacitor.isNativePlatform();
     setIsBroadcasting(true);
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
 
-    watchId.current = window.navigator.geolocation.watchPosition(
-      (pos) => {
-        const speedKmh = pos.coords.speed ? (pos.coords.speed * 3.6).toFixed(1) : "0.0";
-        
-        const currentTelemetry = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          speed: parseFloat(speedKmh),
-          accuracy: pos.coords.accuracy,
-          status: 'LIVE'
-        };
-        
-        setTelemetry(currentTelemetry);
+    if (isNative) {
+      try {
+        const id = await BackgroundGeolocation.addWatcher(
+          {
+            backgroundMessage: "WIMCB Driver is broadcasting telemetry in the background.",
+            backgroundTitle: "Fleet Sync Active",
+            requestPermissions: true,
+            stale: false,
+            distanceFilter: 5 // meters
+          },
+          (location, error) => {
+            if (error) {
+              if (error.code === "NOT_AUTHORIZED") {
+                toast({ 
+                  title: "Permission Required", 
+                  description: "Background location permission is required for transit sync.",
+                  variant: "destructive"
+                });
+                BackgroundGeolocation.openSettings();
+              }
+              return;
+            }
 
-        if (user && driverData) {
-          const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
-          const signalData = {
-            uid: user.uid,
-            email: user.email,
-            bus_id: driverData.busNumber,
-            bus_number: driverData.busNumber,
-            location: {
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude
-            },
-            speed: parseFloat(speedKmh),
-            accuracy: pos.coords.accuracy,
-            timestamp: serverTimestamp()
-          };
-
-          setDoc(signalRef, signalData, { merge: true }).catch(async () => {
-            const permissionError = new FirestorePermissionError({
-              path: signalRef.path,
-              operation: 'write',
-              requestResourceData: signalData
-            });
-            errorEmitter.emit('permission-error', permissionError);
-          });
-        }
-      },
-      (err) => {
-        toast({ title: "GPS Error", description: err.message, variant: "destructive" });
-        stopBroadcast();
-      },
-      { 
-        enableHighAccuracy: true, 
-        timeout: 15000, 
-        maximumAge: 0 
+            if (location) {
+              const speedKmh = location.speed ? parseFloat((location.speed * 3.6).toFixed(1)) : 0;
+              setTelemetry({
+                lat: location.latitude,
+                lng: location.longitude,
+                speed: speedKmh,
+                accuracy: location.accuracy || 0,
+                status: 'LIVE'
+              });
+              updateFirebaseTelemetry(location.latitude, location.longitude, speedKmh, location.accuracy || 0);
+            }
+          }
+        );
+        watchId.current = id;
+      } catch (err: any) {
+        toast({ title: "Native Tracking Error", description: err.message, variant: "destructive" });
+        setIsBroadcasting(false);
       }
-    );
-  }, [user, driverData, db, toast]);
+    } else {
+      // Browser fallback
+      if (!navigator.geolocation) {
+        toast({ title: "GPS Not Supported", variant: "destructive" });
+        setIsBroadcasting(false);
+        return;
+      }
+
+      watchId.current = window.navigator.geolocation.watchPosition(
+        (pos) => {
+          const speedKmh = pos.coords.speed ? parseFloat((pos.coords.speed * 3.6).toFixed(1)) : 0;
+          setTelemetry({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            speed: speedKmh,
+            accuracy: pos.coords.accuracy,
+            status: 'LIVE'
+          });
+          updateFirebaseTelemetry(pos.coords.latitude, pos.coords.longitude, speedKmh, pos.coords.accuracy);
+        },
+        (err) => {
+          toast({ title: "GPS Error", description: err.message, variant: "destructive" });
+          stopBroadcast();
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+  }, [updateFirebaseTelemetry, toast]);
 
   const stopBroadcast = useCallback(() => {
     if (watchId.current !== null) {
-      navigator.geolocation.clearWatch(watchId.current);
+      if (Capacitor.isNativePlatform()) {
+        BackgroundGeolocation.removeWatcher({ id: watchId.current as string });
+      } else {
+        navigator.geolocation.clearWatch(watchId.current as number);
+      }
       watchId.current = null;
     }
     setIsBroadcasting(false);
@@ -174,7 +224,11 @@ export function DriverDashboard() {
   useEffect(() => {
     return () => {
       if (watchId.current !== null) {
-        navigator.geolocation.clearWatch(watchId.current);
+        if (Capacitor.isNativePlatform()) {
+          BackgroundGeolocation.removeWatcher({ id: watchId.current as string });
+        } else {
+          navigator.geolocation.clearWatch(watchId.current as number);
+        }
       }
     };
   }, []);
@@ -314,7 +368,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.5 Optimized</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.5 Native Optimized</p>
       </div>
     </div>
   );
