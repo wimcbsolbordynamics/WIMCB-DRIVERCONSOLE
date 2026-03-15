@@ -19,7 +19,9 @@ import {
   Bus as BusIcon,
   AlertTriangle,
   Activity,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
@@ -33,6 +35,7 @@ export function DriverDashboard() {
   const { toast } = useToast();
   
   const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [telemetry, setTelemetry] = useState({
     lat: 0,
     lng: 0,
@@ -44,6 +47,21 @@ export function DriverDashboard() {
   const [syncing, setSyncing] = useState(false);
   
   const watchId = useRef<string | number | null>(null);
+
+  // Monitor Internet Connectivity
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    setIsOnline(navigator.onLine);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Sync "Exclusive Command" status from Firestore
   useEffect(() => {
@@ -82,7 +100,6 @@ export function DriverDashboard() {
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busNumber);
     
-    // Use setDoc with merge to ensure the bus config exists
     setDoc(busRef, {
       allow_crowdsourcing: val,
       bus_number: driverData.busNumber,
@@ -149,14 +166,11 @@ export function DriverDashboard() {
   const startBroadcast = useCallback(async () => {
     const isNative = Capacitor.isNativePlatform();
     
-    // UI feedback for start
     setIsBroadcasting(true);
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
 
     if (isNative) {
       try {
-        // The addBackgroundWatcher will request standard location permissions.
-        // For Android Background Geolocation ("Always Allow"), the OS often requires a manual toggle.
         const id = await addBackgroundWatcher(
           {
             backgroundMessage: "WIMCB Driver is broadcasting telemetry in the background.",
@@ -174,7 +188,7 @@ export function DriverDashboard() {
               const speedKmh = location.speed ? parseFloat((location.speed * 3.6).toFixed(1)) : 0;
               setTelemetry({
                 lat: location.latitude,
-                lng: location.longitude,
+                longitude: location.longitude,
                 speed: speedKmh,
                 accuracy: location.accuracy || 0,
                 status: 'LIVE'
@@ -188,13 +202,13 @@ export function DriverDashboard() {
           watchId.current = id;
           toast({
             title: "Transmission Started",
-            description: "Background tracking is active. Ensure 'Always Allow' is set in settings."
+            description: "Background tracking active. Ensure 'Always Allow' location is set."
           });
         } else {
           setIsBroadcasting(false);
           toast({ 
             title: "Startup Failed", 
-            description: "Could not initialize native tracking.", 
+            description: "Check native location settings.", 
             variant: "destructive" 
           });
         }
@@ -203,7 +217,6 @@ export function DriverDashboard() {
         setIsBroadcasting(false);
       }
     } else {
-      // Browser environment
       if (!navigator.geolocation) {
         toast({ title: "GPS Not Supported", variant: "destructive" });
         setIsBroadcasting(false);
@@ -251,11 +264,17 @@ export function DriverDashboard() {
   return (
     <div className="flex flex-col min-h-screen max-w-lg mx-auto p-4 space-y-4">
       <div className="flex items-center justify-between pt-2 px-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <div className={`h-2.5 w-2.5 rounded-full ${isBroadcasting ? 'bg-green-500 animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'}`} />
-          <span className="text-xs font-code font-bold uppercase tracking-widest opacity-80">
-            System: {isBroadcasting ? 'ACTIVE' : 'IDLE'}
-          </span>
+          <div className="flex flex-col">
+            <span className="text-[10px] font-code font-bold uppercase tracking-widest opacity-80">
+              System: {isBroadcasting ? 'ACTIVE' : 'IDLE'}
+            </span>
+            <div className={`flex items-center gap-1 text-[9px] font-bold uppercase tracking-tighter ${isOnline ? 'text-green-400' : 'text-destructive'}`}>
+              {isOnline ? <Wifi className="h-2 w-2" /> : <WifiOff className="h-2 w-2" />}
+              {isOnline ? 'Network: Online' : 'Network: Offline'}
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {isBroadcasting && (
@@ -270,26 +289,24 @@ export function DriverDashboard() {
         </div>
       </div>
 
-      {!driverData?.masterBroadcastEnabled && (
-        <Card className="bg-amber-500/10 border-amber-500/50">
-          <CardContent className="p-3 flex items-center gap-3 text-amber-500">
-            <AlertTriangle className="h-5 w-5 shrink-0" />
+      {!isOnline && (
+        <Card className="bg-destructive/10 border-destructive/50 border-dashed">
+          <CardContent className="p-3 flex items-center gap-3 text-destructive">
+            <WifiOff className="h-5 w-5 shrink-0" />
             <p className="text-xs font-semibold leading-tight">
-              Global Master Broadcast is DISABLED. Tracking signals will be ignored by student apps.
+              INTERNET DISCONNECTED. Telemetry cannot reach the fleet server. 
+              Please check your data connection.
             </p>
           </CardContent>
         </Card>
       )}
 
-      {Capacitor.isNativePlatform() && (
-        <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="p-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-primary">
-              <SettingsIcon className="h-4 w-4" />
-              <p className="text-[10px] font-bold uppercase tracking-wider">Background Config</p>
-            </div>
-            <p className="text-[10px] text-muted-foreground italic">
-              Set location to "Allow all the time" in app settings.
+      {!driverData?.masterBroadcastEnabled && (
+        <Card className="bg-amber-500/10 border-amber-500/50">
+          <CardContent className="p-3 flex items-center gap-3 text-amber-500">
+            <AlertTriangle className="h-5 w-5 shrink-0" />
+            <p className="text-xs font-semibold leading-tight">
+              Global Master Broadcast is DISABLED. Signals will be ignored by student apps.
             </p>
           </CardContent>
         </Card>
