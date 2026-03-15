@@ -20,9 +20,12 @@ export async function addBackgroundWatcher(
   if (!Capacitor.isNativePlatform()) return null;
 
   try {
-    // Dynamic import to avoid bundling for web/SSR during Next.js build trace
-    const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
-    return await BackgroundGeolocation.addWatcher(options, callback);
+    // We use a double-layered check to ensure the plugin doesn't crash the web build
+    if (typeof window !== 'undefined') {
+      const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
+      return await BackgroundGeolocation.addWatcher(options, callback);
+    }
+    return null;
   } catch (err) {
     console.warn('Background Geolocation plugin failed to load. Ensure it is installed in your native project.');
     return null;
@@ -33,8 +36,10 @@ export async function removeBackgroundWatcher(id: string) {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
-    const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
-    await BackgroundGeolocation.removeWatcher({ id });
+    if (typeof window !== 'undefined') {
+      const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
+      await BackgroundGeolocation.removeWatcher({ id });
+    }
   } catch (err) {
     console.error('Failed to remove Background Geolocation watcher:', err);
   }
