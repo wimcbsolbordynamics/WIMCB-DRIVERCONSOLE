@@ -1,11 +1,15 @@
 'use client';
 
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import type { BackgroundGeolocationPlugin } from '@capacitor-community/background-geolocation';
+import type { GeolocationPlugin } from '@capacitor/geolocation';
 
 /**
- * Dynamically loads and interacts with the Capacitor Geolocation plugins.
- * Uses casting to "any" to prevent build-time failures during Next.js SSR/Static generation.
+ * Manually register and cast the plugins to bypass Next.js build-time 
+ * module resolution errors for native Capacitor plugins.
  */
+const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
+const Geolocation = registerPlugin<GeolocationPlugin>('Geolocation');
 
 export async function addBackgroundWatcher(
   options: {
@@ -20,20 +24,9 @@ export async function addBackgroundWatcher(
   if (!Capacitor.isNativePlatform()) return null;
 
   try {
-    if (typeof window !== 'undefined') {
-      // Cast the dynamic import to any to bypass strict type checking during NextJS build
-      const mod = (await import('@capacitor-community/background-geolocation')) as any;
-      const BackgroundGeolocation = mod.BackgroundGeolocation || mod.default?.BackgroundGeolocation;
-      
-      if (!BackgroundGeolocation) {
-        throw new Error('BackgroundGeolocation plugin not found');
-      }
-      
-      return await BackgroundGeolocation.addWatcher(options, callback);
-    }
-    return null;
+    return await BackgroundGeolocation.addWatcher(options, callback);
   } catch (err) {
-    console.warn('Background Geolocation plugin failed to load:', err);
+    console.error('Background Geolocation Error:', err);
     return null;
   }
 }
@@ -42,14 +35,7 @@ export async function removeBackgroundWatcher(id: string) {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
-    if (typeof window !== 'undefined') {
-      const mod = (await import('@capacitor-community/background-geolocation')) as any;
-      const BackgroundGeolocation = mod.BackgroundGeolocation || mod.default?.BackgroundGeolocation;
-      
-      if (BackgroundGeolocation) {
-        await BackgroundGeolocation.removeWatcher({ id });
-      }
-    }
+    await BackgroundGeolocation.removeWatcher({ id });
   } catch (err) {
     console.error('Failed to remove Background Geolocation watcher:', err);
   }
@@ -59,20 +45,14 @@ export async function requestLocationPermissions() {
   if (!Capacitor.isNativePlatform()) return null;
   
   try {
-    const mod = (await import('@capacitor/geolocation')) as any;
-    const Geolocation = mod.Geolocation || mod.default?.Geolocation;
+    // First check the current status
+    const status = await Geolocation.checkPermissions();
     
-    if (Geolocation) {
-      // First check the current status
-      const status = await Geolocation.checkPermissions();
-      
-      // If not granted, request them
-      if (status.location !== 'granted') {
-        return await Geolocation.requestPermissions();
-      }
-      return status;
+    // If not granted, request them
+    if (status.location !== 'granted') {
+      return await Geolocation.requestPermissions();
     }
-    return null;
+    return status;
   } catch (err) {
     console.error('Failed to request location permissions:', err);
     return null;
