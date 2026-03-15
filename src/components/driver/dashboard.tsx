@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -19,7 +20,6 @@ import {
   Bus as BusIcon,
   AlertTriangle,
   Activity,
-  Settings as SettingsIcon,
   Wifi,
   WifiOff
 } from 'lucide-react';
@@ -45,21 +45,26 @@ export function DriverDashboard() {
   });
   const [allowCrowdsourcing, setAllowCrowdsourcing] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [permissionPrompted, setPermissionPrompted] = useState(false);
   
-  const watchId = useRef<string | number | null>(null);
+  const watchId = useRef<string | null>(null);
 
   // Monitor Internet Connectivity
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
-    setIsOnline(navigator.onLine);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    if (typeof window !== 'undefined') {
+      setIsOnline(navigator.onLine);
+      window.addEventListener('online', handleOnline);
+      window.addEventListener('offline', handleOffline);
+    }
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
+      }
     };
   }, []);
 
@@ -152,9 +157,9 @@ export function DriverDashboard() {
   const stopBroadcast = useCallback(async () => {
     if (watchId.current !== null) {
       if (Capacitor.isNativePlatform()) {
-        await removeBackgroundWatcher(watchId.current as string);
+        await removeBackgroundWatcher(watchId.current);
       } else {
-        navigator.geolocation.clearWatch(watchId.current as number);
+        navigator.geolocation.clearWatch(parseInt(watchId.current));
       }
       watchId.current = null;
     }
@@ -188,7 +193,7 @@ export function DriverDashboard() {
               const speedKmh = location.speed ? parseFloat((location.speed * 3.6).toFixed(1)) : 0;
               setTelemetry({
                 lat: location.latitude,
-                longitude: location.longitude,
+                lng: location.longitude,
                 speed: speedKmh,
                 accuracy: location.accuracy || 0,
                 status: 'LIVE'
@@ -200,15 +205,18 @@ export function DriverDashboard() {
         
         if (id) {
           watchId.current = id;
-          toast({
-            title: "Transmission Started",
-            description: "Background tracking active. Ensure 'Always Allow' location is set."
-          });
+          if (!permissionPrompted) {
+            toast({
+              title: "System Ready",
+              description: "For background tracking, ensure 'Always Allow' location is set in Android settings."
+            });
+            setPermissionPrompted(true);
+          }
         } else {
           setIsBroadcasting(false);
           toast({ 
             title: "Startup Failed", 
-            description: "Check native location settings.", 
+            description: "Please enable location permissions in app settings.", 
             variant: "destructive" 
           });
         }
@@ -223,7 +231,7 @@ export function DriverDashboard() {
         return;
       }
 
-      watchId.current = window.navigator.geolocation.watchPosition(
+      const id = window.navigator.geolocation.watchPosition(
         (pos) => {
           const speedKmh = pos.coords.speed ? parseFloat((pos.coords.speed * 3.6).toFixed(1)) : 0;
           setTelemetry({
@@ -241,16 +249,17 @@ export function DriverDashboard() {
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
+      watchId.current = id.toString();
     }
-  }, [updateFirebaseTelemetry, toast, stopBroadcast]);
+  }, [updateFirebaseTelemetry, toast, stopBroadcast, permissionPrompted]);
 
   useEffect(() => {
     return () => {
       if (watchId.current !== null) {
         if (Capacitor.isNativePlatform()) {
-          removeBackgroundWatcher(watchId.current as string);
+          removeBackgroundWatcher(watchId.current);
         } else {
-          navigator.geolocation.clearWatch(watchId.current as number);
+          navigator.geolocation.clearWatch(parseInt(watchId.current));
         }
       }
     };
@@ -409,7 +418,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.5 Background Optimized</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.6 Native Optimized</p>
       </div>
     </div>
   );

@@ -1,11 +1,11 @@
+
 'use client';
 
 import { Capacitor } from '@capacitor/core';
 
 /**
  * Dynamically loads and interacts with the Capacitor Background Geolocation plugin.
- * This prevents build-time errors in environments where the plugin isn't installed
- * or during Next.js server-side rendering/static analysis.
+ * This implementation prevents build-time module resolution errors by using runtime imports.
  */
 
 export async function addBackgroundWatcher(
@@ -21,17 +21,12 @@ export async function addBackgroundWatcher(
   if (!Capacitor.isNativePlatform()) return null;
 
   try {
-    const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
-    
-    // Explicitly request permissions if requested
-    if (options.requestPermissions) {
-      // Background Geolocation plugin handles permission requests internally through addWatcher
-      // but some versions might require a manual check for background-specific permissions on Android 11+
-    }
-    
+    // Dynamic import to avoid bundling for web/SSR during Next.js build trace
+    const mod = await import('@capacitor-community/background-geolocation');
+    const BackgroundGeolocation = mod.BackgroundGeolocation;
     return await BackgroundGeolocation.addWatcher(options, callback);
   } catch (err) {
-    console.error('Failed to load Background Geolocation plugin:', err);
+    console.warn('Background Geolocation plugin failed to load. Ensure it is installed in your native project.');
     return null;
   }
 }
@@ -40,7 +35,8 @@ export async function removeBackgroundWatcher(id: string) {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
-    const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
+    const mod = await import('@capacitor-community/background-geolocation');
+    const BackgroundGeolocation = mod.BackgroundGeolocation;
     await BackgroundGeolocation.removeWatcher({ id });
   } catch (err) {
     console.error('Failed to remove Background Geolocation watcher:', err);
