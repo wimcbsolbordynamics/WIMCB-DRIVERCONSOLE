@@ -1,4 +1,3 @@
-
 'use client';
 
 import { Capacitor } from '@capacitor/core';
@@ -22,8 +21,7 @@ export async function addBackgroundWatcher(
 
   try {
     // Dynamic import to avoid bundling for web/SSR during Next.js build trace
-    const mod = await import('@capacitor-community/background-geolocation');
-    const BackgroundGeolocation = mod.BackgroundGeolocation;
+    const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
     return await BackgroundGeolocation.addWatcher(options, callback);
   } catch (err) {
     console.warn('Background Geolocation plugin failed to load. Ensure it is installed in your native project.');
@@ -35,8 +33,7 @@ export async function removeBackgroundWatcher(id: string) {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
-    const mod = await import('@capacitor-community/background-geolocation');
-    const BackgroundGeolocation = mod.BackgroundGeolocation;
+    const { BackgroundGeolocation } = await import('@capacitor-community/background-geolocation');
     await BackgroundGeolocation.removeWatcher({ id });
   } catch (err) {
     console.error('Failed to remove Background Geolocation watcher:', err);
