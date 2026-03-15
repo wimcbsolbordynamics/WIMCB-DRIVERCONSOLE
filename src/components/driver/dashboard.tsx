@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { useFirestore } from '@/firebase';
-import { doc, setDoc, deleteDoc, serverTimestamp, updateDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,11 +13,11 @@ import {
   MapPin, 
   Navigation, 
   LogOut, 
-  Signal, 
+  Signal as SignalIcon, 
   Users, 
   ShieldCheck,
   Zap,
-  Bus,
+  Bus as BusIcon,
   AlertTriangle
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
@@ -42,6 +42,7 @@ export function DriverDashboard() {
   
   const watchId = useRef<number | null>(null);
 
+  // Sync "Exclusive Command" (allow_crowdsourcing) status from Firestore
   useEffect(() => {
     if (driverData?.busNumber) {
       const busRef = doc(db, 'buses', driverData.busNumber);
@@ -78,14 +79,20 @@ export function DriverDashboard() {
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busNumber);
     
-    updateDoc(busRef, {
-      allow_crowdsourcing: val
-    }).then(() => {
-      toast({ title: val ? "Crowdsourcing Restored" : "Exclusive Command Active" });
+    // Using setDoc with merge ensures the bus document is created if it doesn't exist.
+    // This allows the Exclusive Command to act as the primary configuration source.
+    setDoc(busRef, {
+      allow_crowdsourcing: val,
+      bus_number: driverData.busNumber
+    }, { merge: true }).then(() => {
+      toast({ 
+        title: val ? "Crowdsourcing Restored" : "Exclusive Command Active",
+        description: val ? "Student data is now accepted." : "Fleet is now locked to official signals."
+      });
     }).catch(async () => {
       const permissionError = new FirestorePermissionError({
         path: busRef.path,
-        operation: 'update',
+        operation: 'write',
         requestResourceData: { allow_crowdsourcing: val }
       });
       errorEmitter.emit('permission-error', permissionError);
@@ -148,7 +155,7 @@ export function DriverDashboard() {
         toast({ title: "GPS Error", description: err.message, variant: "destructive" });
         stopBroadcast();
       },
-      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   }, [user, driverData, db, toast]);
 
@@ -167,9 +174,8 @@ export function DriverDashboard() {
       if (watchId.current !== null) {
         navigator.geolocation.clearWatch(watchId.current);
       }
-      cleanupSignal();
     };
-  }, [cleanupSignal]);
+  }, []);
 
   const handleLogout = async () => {
     stopBroadcast();
@@ -209,7 +215,7 @@ export function DriverDashboard() {
               <p className="text-sm text-muted-foreground font-code">{user?.email}</p>
             </div>
             <div className="h-12 w-12 rounded-xl bg-primary/20 flex items-center justify-center text-primary border border-primary/30">
-              <Bus className="h-7 w-7" />
+              <BusIcon className="h-7 w-7" />
             </div>
           </div>
         </CardContent>
@@ -285,7 +291,7 @@ export function DriverDashboard() {
         >
           {isBroadcasting ? (
             <div className="flex flex-col items-center">
-              <Signal className="h-8 w-8 mb-1 animate-pulse" />
+              <SignalIcon className="h-8 w-8 mb-1 animate-pulse" />
               <span>Terminate Signal</span>
             </div>
           ) : (
@@ -298,7 +304,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">WIMCB Official Driver Terminal v2.1</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">WIMCB Official Driver Terminal v2.2</p>
       </div>
     </div>
   );
