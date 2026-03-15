@@ -170,7 +170,7 @@ export function DriverDashboard() {
     
     if (isNative) {
       const status = await requestLocationPermissions();
-      if (status?.location !== 'granted') {
+      if (!status || status.location !== 'granted') {
         toast({
           title: "Permission Required",
           description: "Location access is needed to broadcast telemetry.",
@@ -217,7 +217,7 @@ export function DriverDashboard() {
           if (!permissionPrompted) {
             toast({
               title: "System Ready",
-              description: "For background tracking, ensure 'Always Allow' location is set in Android settings."
+              description: "Ensure 'Always Allow' location is enabled in system settings for background tracking."
             });
             setPermissionPrompted(true);
           }

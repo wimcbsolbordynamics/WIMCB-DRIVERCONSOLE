@@ -58,9 +58,14 @@ export async function requestLocationPermissions() {
   if (!Capacitor.isNativePlatform()) return;
   
   try {
-    const { Geolocation } = await import('@capacitor/geolocation');
-    const status = await Geolocation.requestPermissions();
-    return status;
+    // Dynamic import to bypass build-time type checking issues with Capacitor modules in NextJS
+    const mod = await import('@capacitor/geolocation') as any;
+    const Geolocation = mod.Geolocation || mod.default?.Geolocation;
+    
+    if (Geolocation) {
+      const status = await Geolocation.requestPermissions();
+      return status;
+    }
   } catch (err) {
     console.error('Failed to request location permissions:', err);
   }

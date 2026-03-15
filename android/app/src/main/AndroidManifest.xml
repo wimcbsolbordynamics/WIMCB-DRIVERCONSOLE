@@ -38,7 +38,7 @@
         <service
             android:name="com.equimaps.capacitor_background_geolocation.BackgroundGeolocationService"
             android:enabled="true"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="location"
             tools:replace="android:exported" />
 
