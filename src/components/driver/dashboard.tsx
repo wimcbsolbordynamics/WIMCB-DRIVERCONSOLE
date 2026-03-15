@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -19,7 +18,7 @@ import {
   Zap,
   Bus as BusIcon,
   AlertTriangle,
-  Sun
+  Activity
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
@@ -42,9 +41,8 @@ export function DriverDashboard() {
   const [syncing, setSyncing] = useState(false);
   
   const watchId = useRef<number | null>(null);
-  const wakeLock = useRef<any>(null);
 
-  // Sync "Exclusive Command" (allow_crowdsourcing) status from Firestore
+  // Sync "Exclusive Command" status from Firestore
   useEffect(() => {
     if (driverData?.busNumber) {
       const busRef = doc(db, 'buses', driverData.busNumber);
@@ -75,24 +73,6 @@ export function DriverDashboard() {
       });
     }
   }, [user, driverData, db]);
-
-  const requestWakeLock = async () => {
-    try {
-      if ('wakeLock' in navigator) {
-        wakeLock.current = await (navigator as any).wakeLock.request('screen');
-      }
-    } catch (err: any) {
-      console.warn(`Wake Lock failed: ${err.name}, ${err.message}`);
-    }
-  };
-
-  const releaseWakeLock = () => {
-    if (wakeLock.current !== null) {
-      wakeLock.current.release().then(() => {
-        wakeLock.current = null;
-      });
-    }
-  };
 
   const updateAuthority = async (val: boolean) => {
     if (!driverData) return;
@@ -128,7 +108,6 @@ export function DriverDashboard() {
 
     setIsBroadcasting(true);
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
-    await requestWakeLock();
 
     watchId.current = window.navigator.geolocation.watchPosition(
       (pos) => {
@@ -174,7 +153,11 @@ export function DriverDashboard() {
         toast({ title: "GPS Error", description: err.message, variant: "destructive" });
         stopBroadcast();
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { 
+        enableHighAccuracy: true, 
+        timeout: 15000, 
+        maximumAge: 0 
+      }
     );
   }, [user, driverData, db, toast]);
 
@@ -185,7 +168,6 @@ export function DriverDashboard() {
     }
     setIsBroadcasting(false);
     setTelemetry(prev => ({ ...prev, status: 'OFFLINE' }));
-    releaseWakeLock();
     cleanupSignal();
   }, [cleanupSignal]);
 
@@ -194,7 +176,6 @@ export function DriverDashboard() {
       if (watchId.current !== null) {
         navigator.geolocation.clearWatch(watchId.current);
       }
-      releaseWakeLock();
     };
   }, []);
 
@@ -207,16 +188,16 @@ export function DriverDashboard() {
     <div className="flex flex-col min-h-screen max-w-lg mx-auto p-4 space-y-4">
       <div className="flex items-center justify-between pt-2 px-2">
         <div className="flex items-center gap-2">
-          <div className={`h-2.5 w-2.5 rounded-full animate-pulse ${isBroadcasting ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.8)]' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'}`} />
+          <div className={`h-2.5 w-2.5 rounded-full ${isBroadcasting ? 'bg-green-500 animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'}`} />
           <span className="text-xs font-code font-bold uppercase tracking-widest opacity-80">
-            Signal: {isBroadcasting ? 'LIVE' : 'OFFLINE'}
+            System: {isBroadcasting ? 'ACTIVE' : 'IDLE'}
           </span>
         </div>
         <div className="flex items-center gap-2">
           {isBroadcasting && (
-            <div className="flex items-center gap-1 text-[10px] font-bold text-primary animate-pulse mr-2">
-              <Sun className="h-3 w-3" />
-              <span>AWAKE</span>
+            <div className="flex items-center gap-1 text-[10px] font-bold text-primary mr-2">
+              <Activity className="h-3 w-3" />
+              <span>SYNCING</span>
             </div>
           )}
           <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-white">
@@ -230,7 +211,7 @@ export function DriverDashboard() {
           <CardContent className="p-3 flex items-center gap-3 text-amber-500">
             <AlertTriangle className="h-5 w-5 shrink-0" />
             <p className="text-xs font-semibold leading-tight">
-              Global Master Broadcast is currently DISABLED. Your signal may be ignored by student trackers.
+              Global Master Broadcast is DISABLED. Tracking signals will be ignored by student apps.
             </p>
           </CardContent>
         </Card>
@@ -259,7 +240,7 @@ export function DriverDashboard() {
               </div>
               <div className="space-y-0.5">
                 <p className="text-sm font-semibold text-white">Exclusive Command</p>
-                <p className="text-xs text-muted-foreground">Override student crowd data</p>
+                <p className="text-xs text-muted-foreground">Force priority over crowdsourced data</p>
               </div>
             </div>
             <Switch 
@@ -296,7 +277,7 @@ export function DriverDashboard() {
           <CardContent className="p-4 space-y-2">
             <div className="flex items-center gap-2 text-muted-foreground">
               <MapPin className="h-4 w-4" />
-              <span className="text-xs font-code font-bold uppercase">Current Coordinates</span>
+              <span className="text-xs font-code font-bold uppercase">Satellite Fix</span>
             </div>
             <div className="bg-background/50 rounded-lg p-3 font-code text-sm text-primary flex justify-between">
               <span>LAT: {telemetry.lat.toFixed(6)}</span>
@@ -313,27 +294,27 @@ export function DriverDashboard() {
         <Button 
           className={`w-full h-24 text-2xl font-black rounded-2xl transition-all duration-300 transform active:scale-95 shadow-2xl uppercase tracking-tighter ${
             isBroadcasting 
-            ? 'bg-destructive hover:bg-destructive/90 text-white status-glow-offline border-2 border-white/10' 
-            : 'bg-primary hover:bg-primary/90 text-white status-glow-live border-2 border-primary-foreground/10'
+            ? 'bg-destructive hover:bg-destructive/90 text-white border-2 border-white/10' 
+            : 'bg-primary hover:bg-primary/90 text-white border-2 border-primary-foreground/10'
           }`}
           onClick={isBroadcasting ? stopBroadcast : startBroadcast}
         >
           {isBroadcasting ? (
             <div className="flex flex-col items-center">
               <SignalIcon className="h-8 w-8 mb-1 animate-pulse" />
-              <span>Terminate Signal</span>
+              <span>Cease Transmission</span>
             </div>
           ) : (
             <div className="flex flex-col items-center">
               <Radio className="h-8 w-8 mb-1" />
-              <span>Initiate Broadcast</span>
+              <span>Start Transit</span>
             </div>
           )}
         </Button>
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">WIMCB Official Driver Terminal v2.3</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.5 Optimized</p>
       </div>
     </div>
   );
