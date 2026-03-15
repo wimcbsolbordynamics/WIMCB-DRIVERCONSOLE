@@ -49,7 +49,6 @@ export function DriverDashboard() {
   
   const watchId = useRef<string | null>(null);
 
-  // Monitor Internet Connectivity
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -68,7 +67,6 @@ export function DriverDashboard() {
     };
   }, []);
 
-  // Sync "Exclusive Command" status from Firestore
   useEffect(() => {
     if (driverData?.busNumber) {
       const busRef = doc(db, 'buses', driverData.busNumber);
@@ -182,7 +180,7 @@ export function DriverDashboard() {
             backgroundTitle: "Fleet Sync Active",
             requestPermissions: true,
             stale: false,
-            distanceFilter: 5 // meters
+            distanceFilter: 5
           },
           (location, error) => {
             if (error) {
