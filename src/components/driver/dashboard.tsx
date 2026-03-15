@@ -173,7 +173,7 @@ export function DriverDashboard() {
       if (!status || status.location !== 'granted') {
         toast({
           title: "Permission Required",
-          description: "Location access is needed to broadcast telemetry.",
+          description: "Location access is needed to broadcast telemetry. Please enable it in system settings.",
           variant: "destructive"
         });
         return;

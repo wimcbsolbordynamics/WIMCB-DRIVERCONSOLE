@@ -58,7 +58,7 @@ export async function removeBackgroundWatcher(id: string) {
 }
 
 export async function requestLocationPermissions() {
-  if (!Capacitor.isNativePlatform()) return;
+  if (!Capacitor.isNativePlatform()) return { location: 'granted' };
   
   try {
     // @ts-ignore - Bypass build-time type checking for Capacitor native modules
@@ -66,7 +66,12 @@ export async function requestLocationPermissions() {
     const Geolocation = mod.Geolocation || mod.default?.Geolocation;
     
     if (Geolocation) {
-      const status = await Geolocation.requestPermissions();
+      // First check the current status
+      const status = await Geolocation.checkPermissions();
+      if (status.location !== 'granted') {
+        // If not granted, request them
+        return await Geolocation.requestPermissions();
+      }
       return status;
     }
     return null;
