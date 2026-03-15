@@ -69,7 +69,9 @@ export async function requestLocationPermissions() {
       const status = await Geolocation.requestPermissions();
       return status;
     }
+    return null;
   } catch (err) {
     console.error('Failed to request location permissions:', err);
+    return null;
   }
 }
