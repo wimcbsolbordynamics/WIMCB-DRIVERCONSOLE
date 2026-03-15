@@ -18,7 +18,8 @@ import {
   ShieldCheck,
   Zap,
   Bus as BusIcon,
-  AlertTriangle
+  AlertTriangle,
+  Sun
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
@@ -41,6 +42,7 @@ export function DriverDashboard() {
   const [syncing, setSyncing] = useState(false);
   
   const watchId = useRef<number | null>(null);
+  const wakeLock = useRef<any>(null);
 
   // Sync "Exclusive Command" (allow_crowdsourcing) status from Firestore
   useEffect(() => {
@@ -74,13 +76,29 @@ export function DriverDashboard() {
     }
   }, [user, driverData, db]);
 
+  const requestWakeLock = async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock.current = await (navigator as any).wakeLock.request('screen');
+      }
+    } catch (err: any) {
+      console.warn(`Wake Lock failed: ${err.name}, ${err.message}`);
+    }
+  };
+
+  const releaseWakeLock = () => {
+    if (wakeLock.current !== null) {
+      wakeLock.current.release().then(() => {
+        wakeLock.current = null;
+      });
+    }
+  };
+
   const updateAuthority = async (val: boolean) => {
     if (!driverData) return;
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busNumber);
     
-    // Using setDoc with merge ensures the bus document is created if it doesn't exist.
-    // This allows the Exclusive Command to act as the primary configuration source.
     setDoc(busRef, {
       allow_crowdsourcing: val,
       bus_number: driverData.busNumber
@@ -102,7 +120,7 @@ export function DriverDashboard() {
     });
   };
 
-  const startBroadcast = useCallback(() => {
+  const startBroadcast = useCallback(async () => {
     if (typeof window === 'undefined' || !navigator.geolocation) {
       toast({ title: "GPS Not Supported", variant: "destructive" });
       return;
@@ -110,6 +128,7 @@ export function DriverDashboard() {
 
     setIsBroadcasting(true);
     setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
+    await requestWakeLock();
 
     watchId.current = window.navigator.geolocation.watchPosition(
       (pos) => {
@@ -166,6 +185,7 @@ export function DriverDashboard() {
     }
     setIsBroadcasting(false);
     setTelemetry(prev => ({ ...prev, status: 'OFFLINE' }));
+    releaseWakeLock();
     cleanupSignal();
   }, [cleanupSignal]);
 
@@ -174,6 +194,7 @@ export function DriverDashboard() {
       if (watchId.current !== null) {
         navigator.geolocation.clearWatch(watchId.current);
       }
+      releaseWakeLock();
     };
   }, []);
 
@@ -191,9 +212,17 @@ export function DriverDashboard() {
             Signal: {isBroadcasting ? 'LIVE' : 'OFFLINE'}
           </span>
         </div>
-        <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-white">
-          <LogOut className="h-5 w-5" />
-        </Button>
+        <div className="flex items-center gap-2">
+          {isBroadcasting && (
+            <div className="flex items-center gap-1 text-[10px] font-bold text-primary animate-pulse mr-2">
+              <Sun className="h-3 w-3" />
+              <span>AWAKE</span>
+            </div>
+          )}
+          <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-white">
+            <LogOut className="h-5 w-5" />
+          </Button>
+        </div>
       </div>
 
       {!driverData?.masterBroadcastEnabled && (
@@ -304,7 +333,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">WIMCB Official Driver Terminal v2.2</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">WIMCB Official Driver Terminal v2.3</p>
       </div>
     </div>
   );
