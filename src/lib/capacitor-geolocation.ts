@@ -59,6 +59,7 @@ export async function requestLocationPermissions() {
   if (!Capacitor.isNativePlatform()) return null;
   
   try {
+    // Dynamic import to bypass build-time type checking issues with Capacitor modules in NextJS
     const mod = (await import('@capacitor/geolocation')) as any;
     const Geolocation = mod.Geolocation || mod.default?.Geolocation;
     
