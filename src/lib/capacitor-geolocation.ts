@@ -1,6 +1,6 @@
 'use client';
 
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { registerPlugin, Capacitor } from '@capacitor/core';
 import type { BackgroundGeolocationPlugin } from '@capacitor-community/background-geolocation';
 import type { GeolocationPlugin } from '@capacitor/geolocation';
 
@@ -42,19 +42,16 @@ export async function removeBackgroundWatcher(id: string) {
 }
 
 export async function requestLocationPermissions() {
-  if (!Capacitor.isNativePlatform()) return null;
+  if (!Capacitor.isNativePlatform()) return { location: 'granted' as const };
   
   try {
-    // First check the current status
     const status = await Geolocation.checkPermissions();
-    
-    // If not granted, request them
     if (status.location !== 'granted') {
       return await Geolocation.requestPermissions();
     }
     return status;
   } catch (err) {
     console.error('Failed to request location permissions:', err);
-    return null;
+    return { location: 'denied' as const };
   }
 }

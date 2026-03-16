@@ -20,7 +20,8 @@ import {
   AlertTriangle,
   Wifi,
   WifiOff,
-  CloudLightning
+  CloudLightning,
+  Satellite
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
@@ -44,7 +45,6 @@ export function DriverDashboard() {
   });
   const [allowCrowdsourcing, setAllowCrowdsourcing] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [permissionPrompted, setPermissionPrompted] = useState(false);
   
   const watchId = useRef<string | null>(null);
 
@@ -170,10 +170,10 @@ export function DriverDashboard() {
     
     if (isNative) {
       const status = await requestLocationPermissions();
-      if (!status || status.location !== 'granted') {
+      if (status.location !== 'granted') {
         toast({
-          title: "Permission Required",
-          description: "Location access is needed to broadcast telemetry.",
+          title: "Location Permission Required",
+          description: "Please enable location access in system settings.",
           variant: "destructive"
         });
         return;
@@ -191,15 +191,13 @@ export function DriverDashboard() {
             backgroundTitle: "Fleet Sync Active",
             requestPermissions: true,
             stale: false,
-            distanceFilter: 5
+            distanceFilter: 1
           },
           (location, error) => {
-            if (error) {
-              console.error('Location Error:', error);
-              return;
-            }
+            if (error) return;
             if (location) {
-              const speedKmh = location.speed ? parseFloat((location.speed * 3.6).toFixed(1)) : 0;
+              const rawSpeed = location.speed ?? 0;
+              const speedKmh = Math.max(0, parseFloat((rawSpeed * 3.6).toFixed(1)));
               setTelemetry({
                 lat: location.latitude,
                 lng: location.longitude,
@@ -214,35 +212,17 @@ export function DriverDashboard() {
         
         if (id) {
           watchId.current = id;
-          if (!permissionPrompted) {
-            toast({
-              title: "System Ready",
-              description: "Ensure 'Always Allow' location is enabled in system settings for background tracking."
-            });
-            setPermissionPrompted(true);
-          }
         } else {
           setIsBroadcasting(false);
-          toast({ 
-            title: "Startup Failed", 
-            description: "Please check location settings and ensure background access is allowed.", 
-            variant: "destructive" 
-          });
         }
-      } catch (err: any) {
-        toast({ title: "Native Tracking Error", description: err.message, variant: "destructive" });
+      } catch (err) {
         setIsBroadcasting(false);
       }
     } else {
-      if (!navigator.geolocation) {
-        toast({ title: "GPS Not Supported", variant: "destructive" });
-        setIsBroadcasting(false);
-        return;
-      }
-
       const id = window.navigator.geolocation.watchPosition(
         (pos) => {
-          const speedKmh = pos.coords.speed ? parseFloat((pos.coords.speed * 3.6).toFixed(1)) : 0;
+          const rawSpeed = pos.coords.speed ?? 0;
+          const speedKmh = Math.max(0, parseFloat((rawSpeed * 3.6).toFixed(1)));
           setTelemetry({
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
@@ -252,15 +232,12 @@ export function DriverDashboard() {
           });
           updateFirebaseTelemetry(pos.coords.latitude, pos.coords.longitude, speedKmh, pos.coords.accuracy);
         },
-        (err) => {
-          toast({ title: "GPS Error", description: err.message, variant: "destructive" });
-          stopBroadcast();
-        },
+        () => stopBroadcast(),
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
       watchId.current = id.toString();
     }
-  }, [updateFirebaseTelemetry, toast, stopBroadcast, permissionPrompted]);
+  }, [updateFirebaseTelemetry, stopBroadcast, toast]);
 
   useEffect(() => {
     return () => {
@@ -274,16 +251,11 @@ export function DriverDashboard() {
     };
   }, []);
 
-  const handleLogout = async () => {
-    await stopBroadcast();
-    await logout();
-  };
-
   return (
     <div className="flex flex-col min-h-screen max-w-lg mx-auto p-4 space-y-4">
       <div className="flex items-center justify-between pt-2 px-2">
         <div className="flex items-center gap-3">
-          <div className={`h-2.5 w-2.5 rounded-full ${isBroadcasting ? 'bg-green-500 animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]' : 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'}`} />
+          <div className={`h-2.5 w-2.5 rounded-full ${isBroadcasting ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
           <div className="flex flex-col">
             <span className="text-[10px] font-code font-bold uppercase tracking-widest opacity-80">
               System: {isBroadcasting ? 'ACTIVE' : 'IDLE'}
@@ -301,7 +273,7 @@ export function DriverDashboard() {
               <span>{isOnline ? 'CLOUD SYNC' : 'SYNC FAILED'}</span>
             </div>
           )}
-          <Button variant="ghost" size="icon" onClick={handleLogout} className="text-muted-foreground hover:text-white">
+          <Button variant="ghost" size="icon" onClick={() => logout()} className="text-muted-foreground hover:text-white">
             <LogOut className="h-5 w-5" />
           </Button>
         </div>
@@ -312,18 +284,18 @@ export function DriverDashboard() {
           <CardContent className="p-3 flex items-center gap-3 text-destructive">
             <WifiOff className="h-5 w-5 shrink-0" />
             <p className="text-xs font-bold leading-tight uppercase tracking-tight">
-              INTERNET LOST. The fleet cannot see your position. Move to a high-signal area immediately.
+              INTERNET LOST. Move to a high-signal area immediately.
             </p>
           </CardContent>
         </Card>
       )}
 
-      {!driverData?.masterBroadcastEnabled && (
+      {telemetry.accuracy > 50 && isBroadcasting && (
         <Card className="bg-amber-500/10 border-amber-500/50">
           <CardContent className="p-3 flex items-center gap-3 text-amber-500">
-            <AlertTriangle className="h-5 w-5 shrink-0" />
+            <Satellite className="h-5 w-5 shrink-0 animate-bounce" />
             <p className="text-xs font-semibold leading-tight">
-              Global Master Broadcast is DISABLED. Signals will be ignored by student apps.
+              LOW GPS PRECISION (±{telemetry.accuracy.toFixed(0)}m). Speed updates may be delayed.
             </p>
           </CardContent>
         </Card>
@@ -406,8 +378,8 @@ export function DriverDashboard() {
         <Button 
           className={`w-full h-24 text-2xl font-black rounded-2xl transition-all duration-300 transform active:scale-95 shadow-2xl uppercase tracking-tighter ${
             isBroadcasting 
-            ? 'bg-destructive hover:bg-destructive/90 text-white border-2 border-white/10' 
-            : 'bg-primary hover:bg-primary/90 text-white border-2 border-primary-foreground/10'
+            ? 'bg-destructive hover:bg-destructive/90 text-white' 
+            : 'bg-primary hover:bg-primary/90 text-white'
           }`}
           onClick={isBroadcasting ? stopBroadcast : startBroadcast}
         >
