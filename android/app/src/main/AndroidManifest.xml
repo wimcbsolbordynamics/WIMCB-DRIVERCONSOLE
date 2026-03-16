@@ -35,7 +35,6 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
-        <!-- Fixed background service configuration for Capacitor plugin -->
         <service
             android:name="com.equimaps.capacitor_background_geolocation.BackgroundGeolocationService"
             android:enabled="true"

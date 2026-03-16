@@ -50,6 +50,23 @@ export function DriverDashboard() {
   const watchId = useRef<string | null>(null);
   const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
 
+  // Source of Truth Sync: Listen to Firestore signal doc to determine broadcast status
+  useEffect(() => {
+    if (user && driverData?.busNumber) {
+      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+      const unsubscribe = onSnapshot(signalRef, (snapshot) => {
+        const active = snapshot.exists();
+        setIsBroadcasting(active);
+        if (active) {
+          setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
+        } else {
+          setTelemetry(prev => ({ ...prev, status: 'OFFLINE' }));
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [user, driverData, db]);
+
   // Sync Network Status
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -69,7 +86,7 @@ export function DriverDashboard() {
     };
   }, []);
 
-  // Sync Signal Authority Toggle from Firestore
+  // Sync Bus Settings (Authority)
   useEffect(() => {
     if (driverData?.busNumber) {
       const busRef = doc(db, 'buses', driverData.busNumber);
@@ -77,7 +94,6 @@ export function DriverDashboard() {
         if (snapshot.exists()) {
           setAllowCrowdsourcing(snapshot.data().allow_crowdsourcing ?? true);
         } else {
-          // Initialize bus doc if missing
           setDoc(busRef, { 
             bus_number: driverData.busNumber, 
             allow_crowdsourcing: true 
@@ -85,44 +101,25 @@ export function DriverDashboard() {
         }
         setBusDataLoading(false);
       }, (err) => {
-        const permissionError = new FirestorePermissionError({
-          path: busRef.path,
-          operation: 'get'
-        });
-        errorEmitter.emit('permission-error', permissionError);
         setBusDataLoading(false);
       });
       return () => unsubscribe();
     }
   }, [driverData, db]);
 
-  const cleanupSignal = useCallback(async () => {
-    if (user && driverData) {
-      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
-      deleteDoc(signalRef).catch(async () => {
-        const permissionError = new FirestorePermissionError({
-          path: signalRef.path,
-          operation: 'delete'
-        });
-        errorEmitter.emit('permission-error', permissionError);
-      });
-    }
-  }, [user, driverData, db]);
-
   const calculateSpeed = useCallback((lat: number, lng: number, timestamp: number, reportedSpeed: number | null) => {
     let speedKmh = 0;
 
-    // 1. Direct Reading: If reported speed exists and is valid (> 0.2 m/s), use it.
+    // 1. Direct Reading
     if (reportedSpeed !== null && reportedSpeed > 0.2) {
       speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
     } else if (prevPosRef.current) {
-      // 2. Fallback Calculation: Haversine distance over time
+      // 2. Fallback: Haversine distance
       const prev = prevPosRef.current;
       const timeDiffSec = (timestamp - prev.timestamp) / 1000;
 
-      // Ensure at least 1 second has passed to filter jitter
       if (timeDiffSec >= 1) {
-        const R = 6371e3; // Earth radius
+        const R = 6371e3;
         const dLat = (lat - prev.lat) * Math.PI / 180;
         const dLon = (lng - prev.lng) * Math.PI / 180;
         const a = 
@@ -135,15 +132,14 @@ export function DriverDashboard() {
         const speedMps = distance / timeDiffSec;
         speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
 
-        // Smoothing
+        // Smoothing (Force to 0 if under 1.5km/h to avoid jitter)
         if (speedKmh < 1.5) speedKmh = 0;
-        if (speedKmh > 130) speedKmh = telemetry.speed;
+        if (speedKmh > 130) speedKmh = 0; 
       } else {
         speedKmh = telemetry.speed;
       }
     }
 
-    // ALWAYS update reference for next calculation
     prevPosRef.current = { lat, lng, timestamp };
     return speedKmh;
   }, [telemetry.speed]);
@@ -186,10 +182,19 @@ export function DriverDashboard() {
       watchId.current = null;
     }
     prevPosRef.current = null;
-    setIsBroadcasting(false);
-    setTelemetry(prev => ({ ...prev, speed: 0, status: 'OFFLINE' }));
-    cleanupSignal();
-  }, [cleanupSignal]);
+    
+    // Source of Truth: Delete the signal document
+    if (user && driverData) {
+      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+      deleteDoc(signalRef).catch(async () => {
+        const permissionError = new FirestorePermissionError({
+          path: signalRef.path,
+          operation: 'delete'
+        });
+        errorEmitter.emit('permission-error', permissionError);
+      });
+    }
+  }, [user, driverData, db]);
 
   const startBroadcast = useCallback(async () => {
     const isNative = Capacitor.isNativePlatform();
@@ -206,8 +211,21 @@ export function DriverDashboard() {
       }
     }
 
-    setIsBroadcasting(true);
-    setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
+    // Source of Truth: Initialize signal document to signal start
+    if (user && driverData) {
+      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+      const initialData = {
+        uid: user.uid,
+        email: user.email?.toLowerCase(),
+        bus_id: driverData.busNumber,
+        bus_number: driverData.busNumber,
+        location: { latitude: telemetry.lat, longitude: telemetry.lng },
+        speed: telemetry.speed,
+        accuracy: telemetry.accuracy,
+        timestamp: serverTimestamp()
+      };
+      setDoc(signalRef, initialData, { merge: true });
+    }
 
     if (isNative) {
       try {
@@ -240,14 +258,9 @@ export function DriverDashboard() {
             }
           }
         );
-        
-        if (id) {
-          watchId.current = id;
-        } else {
-          setIsBroadcasting(false);
-        }
+        watchId.current = id;
       } catch (err) {
-        setIsBroadcasting(false);
+        stopBroadcast();
       }
     } else {
       const id = window.navigator.geolocation.watchPosition(
@@ -273,9 +286,8 @@ export function DriverDashboard() {
       );
       watchId.current = id.toString();
     }
-  }, [calculateSpeed, updateFirebaseTelemetry, stopBroadcast, toast]);
+  }, [calculateSpeed, updateFirebaseTelemetry, stopBroadcast, toast, user, driverData, db, telemetry]);
 
-  // Write Signal Authority Control to Firestore
   const updateAuthority = async (val: boolean) => {
     if (!driverData) return;
     setSyncing(true);
@@ -289,29 +301,8 @@ export function DriverDashboard() {
         title: val ? "Crowdsourcing Restored" : "Exclusive Command Active",
         description: val ? "Student data is now accepted." : "Fleet is now locked to official signals."
       });
-    }).catch(async () => {
-      const permissionError = new FirestorePermissionError({
-        path: busRef.path,
-        operation: 'write',
-        requestResourceData: { allow_crowdsourcing: val }
-      });
-      errorEmitter.emit('permission-error', permissionError);
-    }).finally(() => {
-      setSyncing(false);
-    });
+    }).finally(() => setSyncing(false));
   };
-
-  useEffect(() => {
-    return () => {
-      if (watchId.current !== null) {
-        if (Capacitor.isNativePlatform()) {
-          removeBackgroundWatcher(watchId.current);
-        } else {
-          navigator.geolocation.clearWatch(parseInt(watchId.current));
-        }
-      }
-    };
-  }, []);
 
   return (
     <div className="flex flex-col min-h-screen max-w-lg mx-auto p-4 space-y-4">
@@ -342,11 +333,11 @@ export function DriverDashboard() {
       </div>
 
       {!isOnline && (
-        <Card className="bg-destructive/10 border-destructive/50 border-dashed animate-pulse">
+        <Card className="bg-destructive/10 border-destructive/50 animate-pulse">
           <CardContent className="p-3 flex items-center gap-3 text-destructive">
             <WifiOff className="h-5 w-5 shrink-0" />
             <p className="text-xs font-bold leading-tight uppercase tracking-tight">
-              INTERNET LOST. Move to a high-signal area immediately.
+              INTERNET LOST. Move to high-signal area.
             </p>
           </CardContent>
         </Card>
@@ -357,7 +348,7 @@ export function DriverDashboard() {
           <CardContent className="p-3 flex items-center gap-3 text-amber-500">
             <Satellite className="h-5 w-5 shrink-0 animate-bounce" />
             <p className="text-xs font-semibold leading-tight">
-              LOW GPS PRECISION (±{telemetry.accuracy.toFixed(0)}m). Speed updates may be delayed.
+              LOW GPS PRECISION (±{telemetry.accuracy.toFixed(0)}m).
             </p>
           </CardContent>
         </Card>
@@ -386,7 +377,7 @@ export function DriverDashboard() {
               </div>
               <div className="space-y-0.5">
                 <p className="text-sm font-semibold text-white">Exclusive Command</p>
-                <p className="text-xs text-muted-foreground">Force priority over crowdsourced data</p>
+                <p className="text-xs text-muted-foreground">Force official signal priority</p>
               </div>
             </div>
             {busDataLoading ? (
@@ -463,8 +454,8 @@ export function DriverDashboard() {
         </Button>
       </div>
       
-      <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.8 Permissions Optimized</p>
+      <div className="text-center pb-2 opacity-30">
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.9 Firestore Optimized</p>
       </div>
     </div>
   );

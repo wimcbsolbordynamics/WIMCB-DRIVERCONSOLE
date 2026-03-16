@@ -7,7 +7,6 @@ import type { GeolocationPlugin } from '@capacitor/geolocation';
 /**
  * Manually register the plugins to bypass Next.js build-time 
  * module resolution errors for native Capacitor plugins.
- * This is the correct pattern for NextJS + Capacitor.
  */
 // @ts-ignore
 const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
@@ -48,11 +47,9 @@ export async function requestLocationPermissions() {
   if (!Capacitor.isNativePlatform()) return { location: 'granted' as const };
   
   try {
-    // Check basic permissions first
     const status = await Geolocation.checkPermissions();
     if (status.location !== 'granted') {
-      const request = await Geolocation.requestPermissions();
-      return request;
+      return await Geolocation.requestPermissions();
     }
     return status;
   } catch (err) {
