@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -49,19 +50,26 @@ export function DriverDashboard() {
   
   const watchId = useRef<string | null>(null);
   const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
+  
+  // Use REFS to prevent stale closures in the background geolocation callback
+  const userRef = useRef(user);
+  const driverDataRef = useRef(driverData);
+  const telemetryRef = useRef(telemetry);
 
-  // Source of Truth Sync: Listen to Firestore signal doc to determine broadcast status
   useEffect(() => {
-    if (user && driverData?.busNumber) {
-      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+    userRef.current = user;
+    driverDataRef.current = driverData;
+    telemetryRef.current = telemetry;
+  }, [user, driverData, telemetry]);
+
+  // Source of Truth Sync: Listen to the EXACT signal document path
+  useEffect(() => {
+    if (user && driverData?.busId) {
+      const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       const unsubscribe = onSnapshot(signalRef, (snapshot) => {
         const active = snapshot.exists();
         setIsBroadcasting(active);
-        if (active) {
-          setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
-        } else {
-          setTelemetry(prev => ({ ...prev, status: 'OFFLINE' }));
-        }
+        setTelemetry(prev => ({ ...prev, status: active ? 'LIVE' : 'OFFLINE' }));
       });
       return () => unsubscribe();
     }
@@ -71,13 +79,11 @@ export function DriverDashboard() {
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
-
     if (typeof window !== 'undefined') {
       setIsOnline(navigator.onLine);
       window.addEventListener('online', handleOnline);
       window.addEventListener('offline', handleOffline);
     }
-
     return () => {
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', handleOnline);
@@ -86,10 +92,10 @@ export function DriverDashboard() {
     };
   }, []);
 
-  // Sync Bus Settings (Authority)
+  // Sync Bus Settings (Authority) using Resolved ID
   useEffect(() => {
-    if (driverData?.busNumber) {
-      const busRef = doc(db, 'buses', driverData.busNumber);
+    if (driverData?.busId) {
+      const busRef = doc(db, 'buses', driverData.busId);
       const unsubscribe = onSnapshot(busRef, (snapshot) => {
         if (snapshot.exists()) {
           setAllowCrowdsourcing(snapshot.data().allow_crowdsourcing ?? true);
@@ -110,16 +116,17 @@ export function DriverDashboard() {
   const calculateSpeed = useCallback((lat: number, lng: number, timestamp: number, reportedSpeed: number | null) => {
     let speedKmh = 0;
 
-    // 1. Direct Reading
-    if (reportedSpeed !== null && reportedSpeed > 0.2) {
+    // 1. Direct Reading (m/s to km/h)
+    if (reportedSpeed !== null && reportedSpeed > 0.1) {
       speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
     } else if (prevPosRef.current) {
-      // 2. Fallback: Haversine distance
+      // 2. Fallback Algorithm: Haversine distance
       const prev = prevPosRef.current;
       const timeDiffSec = (timestamp - prev.timestamp) / 1000;
 
+      // Only calculate if at least 1 second has passed to avoid jitter
       if (timeDiffSec >= 1) {
-        const R = 6371e3;
+        const R = 6371e3; // Earth radius in meters
         const dLat = (lat - prev.lat) * Math.PI / 180;
         const dLon = (lng - prev.lng) * Math.PI / 180;
         const a = 
@@ -132,26 +139,29 @@ export function DriverDashboard() {
         const speedMps = distance / timeDiffSec;
         speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
 
-        // Smoothing (Force to 0 if under 1.5km/h to avoid jitter)
+        // Smoothing: Force to 0 if under 1.5km/h to avoid jitter
         if (speedKmh < 1.5) speedKmh = 0;
         if (speedKmh > 130) speedKmh = 0; 
       } else {
-        speedKmh = telemetry.speed;
+        speedKmh = telemetryRef.current.speed;
       }
     }
 
     prevPosRef.current = { lat, lng, timestamp };
     return speedKmh;
-  }, [telemetry.speed]);
+  }, []);
 
   const updateFirebaseTelemetry = useCallback((lat: number, lng: number, speed: number, accuracy: number) => {
-    if (user && driverData) {
-      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+    const u = userRef.current;
+    const d = driverDataRef.current;
+    
+    if (u && d?.busId) {
+      const signalRef = doc(db, 'buses', d.busId, 'signals', u.uid);
       const signalData = {
-        uid: user.uid,
-        email: user.email?.toLowerCase(),
-        bus_id: driverData.busNumber,
-        bus_number: driverData.busNumber,
+        uid: u.uid,
+        email: u.email?.toLowerCase(),
+        bus_id: d.busId,
+        bus_number: d.busNumber,
         location: {
           latitude: lat,
           longitude: lng
@@ -161,7 +171,7 @@ export function DriverDashboard() {
         timestamp: serverTimestamp()
       };
 
-      setDoc(signalRef, signalData, { merge: true }).catch(async () => {
+      setDoc(signalRef, signalData, { merge: true }).catch(async (err) => {
         const permissionError = new FirestorePermissionError({
           path: signalRef.path,
           operation: 'write',
@@ -170,7 +180,7 @@ export function DriverDashboard() {
         errorEmitter.emit('permission-error', permissionError);
       });
     }
-  }, [user, driverData, db]);
+  }, [db]);
 
   const stopBroadcast = useCallback(async () => {
     if (watchId.current !== null) {
@@ -183,9 +193,9 @@ export function DriverDashboard() {
     }
     prevPosRef.current = null;
     
-    // Source of Truth: Delete the signal document
-    if (user && driverData) {
-      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+    // Source of Truth: Delete the signal document to stop broadcast
+    if (user && driverData?.busId) {
+      const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       deleteDoc(signalRef).catch(async () => {
         const permissionError = new FirestorePermissionError({
           path: signalRef.path,
@@ -203,7 +213,7 @@ export function DriverDashboard() {
       const status = await requestLocationPermissions();
       if (status.location !== 'granted') {
         toast({
-          title: "Location Permission Required",
+          title: "Permission Required",
           description: "WIMCB requires 'Allow all the time' location access to sync fleet data in the background.",
           variant: "destructive"
         });
@@ -211,13 +221,13 @@ export function DriverDashboard() {
       }
     }
 
-    // Source of Truth: Initialize signal document to signal start
-    if (user && driverData) {
-      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+    // Source of Truth: Create document to signal broadcast start
+    if (user && driverData?.busId) {
+      const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       const initialData = {
         uid: user.uid,
         email: user.email?.toLowerCase(),
-        bus_id: driverData.busNumber,
+        bus_id: driverData.busId,
         bus_number: driverData.busNumber,
         location: { latitude: telemetry.lat, longitude: telemetry.lng },
         speed: telemetry.speed,
@@ -286,12 +296,12 @@ export function DriverDashboard() {
       );
       watchId.current = id.toString();
     }
-  }, [calculateSpeed, updateFirebaseTelemetry, stopBroadcast, toast, user, driverData, db, telemetry]);
+  }, [calculateSpeed, updateFirebaseTelemetry, stopBroadcast, toast, user, driverData, telemetry]);
 
   const updateAuthority = async (val: boolean) => {
-    if (!driverData) return;
+    if (!driverData?.busId) return;
     setSyncing(true);
-    const busRef = doc(db, 'buses', driverData.busNumber);
+    const busRef = doc(db, 'buses', driverData.busId);
     
     updateDoc(busRef, {
       allow_crowdsourcing: val,

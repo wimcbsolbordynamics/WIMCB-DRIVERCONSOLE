@@ -1,3 +1,4 @@
+
 'use client';
 
 import { registerPlugin, Capacitor } from '@capacitor/core';
