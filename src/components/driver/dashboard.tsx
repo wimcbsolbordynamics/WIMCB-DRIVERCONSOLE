@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -22,7 +21,8 @@ import {
   Wifi,
   WifiOff,
   CloudLightning,
-  Satellite
+  Satellite,
+  AlertTriangle
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { errorEmitter } from '@/firebase/error-emitter';
@@ -61,13 +61,17 @@ export function DriverDashboard() {
     telemetryRef.current = telemetry;
   }, [user, driverData, telemetry]);
 
+  // Sync isBroadcasting state from Firestore source of truth
   useEffect(() => {
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       const unsubscribe = onSnapshot(signalRef, (snapshot) => {
         const active = snapshot.exists();
         setIsBroadcasting(active);
-        setTelemetry(prev => ({ ...prev, status: active ? 'LIVE' : 'OFFLINE' }));
+        if (!active && watchId.current) {
+          // If Firestore document is deleted but local watcher is still running, stop it
+          stopBroadcastLocally();
+        }
       });
       return () => unsubscribe();
     }
@@ -95,11 +99,6 @@ export function DriverDashboard() {
       const unsubscribe = onSnapshot(busRef, (snapshot) => {
         if (snapshot.exists()) {
           setAllowCrowdsourcing(snapshot.data().allow_crowdsourcing ?? true);
-        } else {
-          setDoc(busRef, { 
-            bus_number: driverData.busNumber, 
-            allow_crowdsourcing: true 
-          }, { merge: true });
         }
         setBusDataLoading(false);
       }, (err) => {
@@ -112,14 +111,16 @@ export function DriverDashboard() {
   const calculateSpeed = useCallback((lat: number, lng: number, timestamp: number, reportedSpeed: number | null) => {
     let speedKmh = 0;
 
+    // Direct sensor reading (m/s to km/h)
     if (reportedSpeed !== null && reportedSpeed > 0.1) {
       speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
     } else if (prevPosRef.current) {
+      // Manual fallback calculation
       const prev = prevPosRef.current;
       const timeDiffSec = (timestamp - prev.timestamp) / 1000;
 
       if (timeDiffSec >= 1) {
-        const R = 6371e3;
+        const R = 6371e3; // Earth radius in meters
         const dLat = (lat - prev.lat) * Math.PI / 180;
         const dLon = (lng - prev.lng) * Math.PI / 180;
         const a = 
@@ -132,7 +133,8 @@ export function DriverDashboard() {
         const speedMps = distance / timeDiffSec;
         speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
 
-        if (speedKmh < 0.5) speedKmh = 0;
+        // Jitter Filtering: Ignore small drift while stationary
+        if (speedKmh < 1.2) speedKmh = 0;
         if (speedKmh > 130) speedKmh = 0; 
       } else {
         speedKmh = telemetryRef.current.speed;
@@ -163,18 +165,13 @@ export function DriverDashboard() {
         timestamp: serverTimestamp()
       };
 
-      setDoc(signalRef, signalData, { merge: true }).catch(async (err) => {
-        const permissionError = new FirestorePermissionError({
-          path: signalRef.path,
-          operation: 'write',
-          requestResourceData: signalData
-        });
-        errorEmitter.emit('permission-error', permissionError);
+      setDoc(signalRef, signalData, { merge: true }).catch((err) => {
+        console.error("Telemetry sync failed:", err);
       });
     }
   }, [db]);
 
-  const stopBroadcast = useCallback(async () => {
+  const stopBroadcastLocally = async () => {
     if (watchId.current !== null) {
       if (Capacitor.isNativePlatform()) {
         await removeBackgroundWatcher(watchId.current);
@@ -184,20 +181,18 @@ export function DriverDashboard() {
       watchId.current = null;
     }
     prevPosRef.current = null;
-    
+    setTelemetry(prev => ({ ...prev, status: 'OFFLINE', speed: 0 }));
+  };
+
+  const stopBroadcast = async () => {
+    await stopBroadcastLocally();
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
-      deleteDoc(signalRef).catch(async () => {
-        const permissionError = new FirestorePermissionError({
-          path: signalRef.path,
-          operation: 'delete'
-        });
-        errorEmitter.emit('permission-error', permissionError);
-      });
+      await deleteDoc(signalRef);
     }
-  }, [user, driverData, db]);
+  };
 
-  const startBroadcast = useCallback(async () => {
+  const startBroadcast = async () => {
     const isNative = Capacitor.isNativePlatform();
     
     if (isNative) {
@@ -205,26 +200,26 @@ export function DriverDashboard() {
       if (status.location !== 'granted') {
         toast({
           title: "Permission Required",
-          description: "Please go to Android Settings > Apps > WIMCB Driver > Permissions > Location and select 'Allow all the time'.",
+          description: "Location must be set to 'Allow all the time' in System Settings for background sync.",
           variant: "destructive"
         });
         return;
       }
     }
 
+    // Initialize the Firestore document to signal "LIVE" status to the Tracker
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
-      const initialData = {
+      await setDoc(signalRef, {
         uid: user.uid,
         email: user.email?.toLowerCase(),
         bus_id: driverData.busId,
         bus_number: driverData.busNumber,
         location: { latitude: telemetry.lat, longitude: telemetry.lng },
-        speed: telemetry.speed,
-        accuracy: telemetry.accuracy,
+        speed: 0,
+        accuracy: 0,
         timestamp: serverTimestamp()
-      };
-      setDoc(signalRef, initialData, { merge: true });
+      }, { merge: true });
     }
 
     if (isNative) {
@@ -235,10 +230,13 @@ export function DriverDashboard() {
             backgroundTitle: "WIMCB Command Active",
             requestPermissions: true,
             stale: false,
-            distanceFilter: 1
+            distanceFilter: 2
           },
           (location, error) => {
-            if (error) return;
+            if (error) {
+              console.error("Watcher Error:", error);
+              return;
+            }
             if (location) {
               const speedKmh = calculateSpeed(
                 location.latitude, 
@@ -260,9 +258,10 @@ export function DriverDashboard() {
         );
         watchId.current = id;
       } catch (err) {
+        console.error("Startup Failure:", err);
         toast({
           title: "Startup Failed",
-          description: "Please enable 'Allow all the time' location permissions in app settings.",
+          description: "Ensure 'Allow all the time' location permission is enabled in app info.",
           variant: "destructive"
         });
         stopBroadcast();
@@ -291,7 +290,7 @@ export function DriverDashboard() {
       );
       watchId.current = id.toString();
     }
-  }, [calculateSpeed, updateFirebaseTelemetry, stopBroadcast, toast, user, driverData, telemetry]);
+  };
 
   const updateAuthority = async (val: boolean) => {
     if (!driverData?.busId) return;
@@ -352,9 +351,10 @@ export function DriverDashboard() {
         <Card className="bg-amber-500/10 border-amber-500/50">
           <CardContent className="p-3 flex items-center gap-3 text-amber-500">
             <Satellite className="h-5 w-5 shrink-0 animate-bounce" />
-            <p className="text-xs font-semibold leading-tight">
-              LOW GPS PRECISION (±{telemetry.accuracy.toFixed(0)}m).
-            </p>
+            <div className="flex flex-col">
+              <p className="text-xs font-bold leading-tight uppercase">Low GPS Precision</p>
+              <p className="text-[10px] opacity-80 font-semibold tracking-tight">Accuracy: ±{telemetry.accuracy.toFixed(0)}m. Speed may be throttled.</p>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -402,7 +402,7 @@ export function DriverDashboard() {
             <CardContent className="p-4 flex flex-col items-center justify-center space-y-2">
               <Navigation className="h-5 w-5 text-primary opacity-70" />
               <div className="text-center">
-                <p className="text-2xl font-code font-bold text-white">{telemetry.speed}</p>
+                <p className="text-3xl font-code font-bold text-white leading-none">{telemetry.speed}</p>
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">KM/H</p>
               </div>
             </CardContent>
@@ -412,7 +412,7 @@ export function DriverDashboard() {
             <CardContent className="p-4 flex flex-col items-center justify-center space-y-2">
               <Zap className="h-5 w-5 text-amber-500 opacity-70" />
               <div className="text-center">
-                <p className="text-2xl font-code font-bold text-white">±{telemetry.accuracy.toFixed(0)}</p>
+                <p className="text-3xl font-code font-bold text-white leading-none">{telemetry.accuracy > 0 ? telemetry.accuracy.toFixed(0) : '---'}</p>
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">ACCURACY (M)</p>
               </div>
             </CardContent>
@@ -425,10 +425,10 @@ export function DriverDashboard() {
               <MapPin className="h-4 w-4" />
               <span className="text-xs font-code font-bold uppercase">Satellite Fix</span>
             </div>
-            <div className="bg-background/50 rounded-lg p-3 font-code text-sm text-primary flex justify-between">
-              <span>LAT: {telemetry.lat.toFixed(6)}</span>
+            <div className="bg-background/50 rounded-lg p-3 font-code text-[11px] text-primary flex justify-between">
+              <span>LAT: {telemetry.lat ? telemetry.lat.toFixed(6) : '0.000000'}</span>
               <span className="opacity-30">|</span>
-              <span>LNG: {telemetry.lng.toFixed(6)}</span>
+              <span>LNG: {telemetry.lng ? telemetry.lng.toFixed(6) : '0.000000'}</span>
             </div>
           </CardContent>
         </Card>
@@ -460,7 +460,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.7 Permissions Optimized</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.9 Permissions Optimized</p>
       </div>
     </div>
   );

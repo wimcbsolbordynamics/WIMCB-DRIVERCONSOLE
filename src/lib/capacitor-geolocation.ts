@@ -1,17 +1,10 @@
-
 'use client';
 
 import { registerPlugin, Capacitor } from '@capacitor/core';
 import type { BackgroundGeolocationPlugin } from '@capacitor-community/background-geolocation';
 import type { GeolocationPlugin, PermissionStatus } from '@capacitor/geolocation';
 
-/**
- * Manually register the plugins to bypass Next.js build-time 
- * module resolution errors for native Capacitor plugins.
- */
-// @ts-ignore
 const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
-// @ts-ignore
 const Geolocation = registerPlugin<GeolocationPlugin>('Geolocation');
 
 export async function addBackgroundWatcher(
@@ -25,23 +18,12 @@ export async function addBackgroundWatcher(
   callback: (location: any, error: any) => void
 ) {
   if (!Capacitor.isNativePlatform()) return null;
-
-  try {
-    return await BackgroundGeolocation.addWatcher(options, callback);
-  } catch (err) {
-    console.error('Background Geolocation Error:', err);
-    throw err;
-  }
+  return await BackgroundGeolocation.addWatcher(options, callback);
 }
 
 export async function removeBackgroundWatcher(id: string) {
   if (!Capacitor.isNativePlatform()) return;
-
-  try {
-    await BackgroundGeolocation.removeWatcher({ id });
-  } catch (err) {
-    console.error('Failed to remove Background Geolocation watcher:', err);
-  }
+  await BackgroundGeolocation.removeWatcher({ id });
 }
 
 export async function requestLocationPermissions(): Promise<PermissionStatus> {
@@ -50,15 +32,14 @@ export async function requestLocationPermissions(): Promise<PermissionStatus> {
   try {
     const status = await Geolocation.checkPermissions();
     
-    // If not granted, request the standard permissions first
+    // On Android, we need to explicitly request the permissions if they aren't 'granted'
     if (status.location !== 'granted') {
-      const requestStatus = await Geolocation.requestPermissions();
-      return requestStatus;
+      return await Geolocation.requestPermissions();
     }
     
     return status;
   } catch (err) {
-    console.error('Failed to request location permissions:', err);
+    console.error('Permission Request Error:', err);
     return { location: 'denied', coarseLocation: 'denied' };
   }
 }
