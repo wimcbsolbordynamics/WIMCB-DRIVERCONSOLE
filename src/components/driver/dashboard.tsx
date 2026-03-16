@@ -51,7 +51,6 @@ export function DriverDashboard() {
   const watchId = useRef<string | null>(null);
   const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
   
-  // Use REFS to prevent stale closures in the background geolocation callback
   const userRef = useRef(user);
   const driverDataRef = useRef(driverData);
   const telemetryRef = useRef(telemetry);
@@ -62,7 +61,6 @@ export function DriverDashboard() {
     telemetryRef.current = telemetry;
   }, [user, driverData, telemetry]);
 
-  // Source of Truth Sync: Listen to the EXACT signal document path
   useEffect(() => {
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
@@ -75,7 +73,6 @@ export function DriverDashboard() {
     }
   }, [user, driverData, db]);
 
-  // Sync Network Status
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -92,7 +89,6 @@ export function DriverDashboard() {
     };
   }, []);
 
-  // Sync Bus Settings (Authority) using Resolved ID
   useEffect(() => {
     if (driverData?.busId) {
       const busRef = doc(db, 'buses', driverData.busId);
@@ -116,17 +112,14 @@ export function DriverDashboard() {
   const calculateSpeed = useCallback((lat: number, lng: number, timestamp: number, reportedSpeed: number | null) => {
     let speedKmh = 0;
 
-    // 1. Direct Reading (m/s to km/h)
     if (reportedSpeed !== null && reportedSpeed > 0.1) {
       speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
     } else if (prevPosRef.current) {
-      // 2. Fallback Algorithm: Haversine distance
       const prev = prevPosRef.current;
       const timeDiffSec = (timestamp - prev.timestamp) / 1000;
 
-      // Only calculate if at least 1 second has passed to avoid jitter
       if (timeDiffSec >= 1) {
-        const R = 6371e3; // Earth radius in meters
+        const R = 6371e3;
         const dLat = (lat - prev.lat) * Math.PI / 180;
         const dLon = (lng - prev.lng) * Math.PI / 180;
         const a = 
@@ -139,8 +132,7 @@ export function DriverDashboard() {
         const speedMps = distance / timeDiffSec;
         speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
 
-        // Smoothing: Force to 0 if under 1.5km/h to avoid jitter
-        if (speedKmh < 1.5) speedKmh = 0;
+        if (speedKmh < 0.5) speedKmh = 0;
         if (speedKmh > 130) speedKmh = 0; 
       } else {
         speedKmh = telemetryRef.current.speed;
@@ -193,7 +185,6 @@ export function DriverDashboard() {
     }
     prevPosRef.current = null;
     
-    // Source of Truth: Delete the signal document to stop broadcast
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       deleteDoc(signalRef).catch(async () => {
@@ -214,14 +205,13 @@ export function DriverDashboard() {
       if (status.location !== 'granted') {
         toast({
           title: "Permission Required",
-          description: "WIMCB requires 'Allow all the time' location access to sync fleet data in the background.",
+          description: "Please go to Android Settings > Apps > WIMCB Driver > Permissions > Location and select 'Allow all the time'.",
           variant: "destructive"
         });
         return;
       }
     }
 
-    // Source of Truth: Create document to signal broadcast start
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       const initialData = {
@@ -270,6 +260,11 @@ export function DriverDashboard() {
         );
         watchId.current = id;
       } catch (err) {
+        toast({
+          title: "Startup Failed",
+          description: "Please enable 'Allow all the time' location permissions in app settings.",
+          variant: "destructive"
+        });
         stopBroadcast();
       }
     } else {
@@ -465,7 +460,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.9 Firestore Optimized</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.7 Permissions Optimized</p>
       </div>
     </div>
   );
