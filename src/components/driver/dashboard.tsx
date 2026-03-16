@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   Zap,
   Bus as BusIcon,
-  AlertTriangle,
   Wifi,
   WifiOff,
   CloudLightning,
@@ -47,6 +46,7 @@ export function DriverDashboard() {
   const [syncing, setSyncing] = useState(false);
   
   const watchId = useRef<string | null>(null);
+  const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -97,6 +97,175 @@ export function DriverDashboard() {
     }
   }, [user, driverData, db]);
 
+  const calculateSpeed = useCallback((lat: number, lng: number, timestamp: number, reportedSpeed: number | null) => {
+    // 1. Direct Reading: If reported speed exists and is valid (> 0.2 m/s), use it.
+    if (reportedSpeed !== null && reportedSpeed > 0.2) {
+      return parseFloat((reportedSpeed * 3.6).toFixed(1));
+    }
+
+    // 2. Fallback Calculation: Haversine distance over time
+    if (!prevPosRef.current) {
+      prevPosRef.current = { lat, lng, timestamp };
+      return 0;
+    }
+
+    const prev = prevPosRef.current;
+    const timeDiffSec = (timestamp - prev.timestamp) / 1000;
+
+    // Ignore updates that are too close in time to prevent division by zero or extreme outliers
+    if (timeDiffSec < 1) return telemetry.speed;
+
+    // Haversine Formula for distance
+    const R = 6371e3; // Earth radius in metres
+    const dLat = (lat - prev.lat) * Math.PI / 180;
+    const dLon = (lng - prev.lng) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(prev.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const distance = R * c;
+
+    const speedMps = distance / timeDiffSec;
+    let speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
+
+    // Smoothing: If speed is less than 1.5 km/h, it's likely GPS jitter. Force to 0.
+    if (speedKmh < 1.5) speedKmh = 0;
+    
+    // Safety cap: Prevent impossible speeds from GPS teleportation
+    if (speedKmh > 130) speedKmh = telemetry.speed;
+
+    prevPosRef.current = { lat, lng, timestamp };
+    return speedKmh;
+  }, [telemetry.speed]);
+
+  const updateFirebaseTelemetry = useCallback((lat: number, lng: number, speed: number, accuracy: number) => {
+    if (user && driverData) {
+      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
+      const signalData = {
+        uid: user.uid,
+        email: user.email?.toLowerCase(),
+        bus_id: driverData.busNumber,
+        bus_number: driverData.busNumber,
+        location: {
+          latitude: lat,
+          longitude: lng
+        },
+        speed: speed,
+        accuracy: accuracy,
+        timestamp: serverTimestamp()
+      };
+
+      setDoc(signalRef, signalData, { merge: true }).catch(async () => {
+        const permissionError = new FirestorePermissionError({
+          path: signalRef.path,
+          operation: 'write',
+          requestResourceData: signalData
+        });
+        errorEmitter.emit('permission-error', permissionError);
+      });
+    }
+  }, [user, driverData, db]);
+
+  const stopBroadcast = useCallback(async () => {
+    if (watchId.current !== null) {
+      if (Capacitor.isNativePlatform()) {
+        await removeBackgroundWatcher(watchId.current);
+      } else {
+        navigator.geolocation.clearWatch(parseInt(watchId.current));
+      }
+      watchId.current = null;
+    }
+    prevPosRef.current = null;
+    setIsBroadcasting(false);
+    setTelemetry(prev => ({ ...prev, speed: 0, status: 'OFFLINE' }));
+    cleanupSignal();
+  }, [cleanupSignal]);
+
+  const startBroadcast = useCallback(async () => {
+    const isNative = Capacitor.isNativePlatform();
+    
+    if (isNative) {
+      const status = await requestLocationPermissions();
+      if (status.location !== 'granted') {
+        toast({
+          title: "Location Permission Required",
+          description: "WIMCB requires 'Allow all the time' location access to sync fleet data in the background.",
+          variant: "destructive"
+        });
+        return;
+      }
+    }
+
+    setIsBroadcasting(true);
+    setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
+
+    if (isNative) {
+      try {
+        const id = await addBackgroundWatcher(
+          {
+            backgroundMessage: "Fleet Sync is broadcasting precision telemetry.",
+            backgroundTitle: "WIMCB Command Active",
+            requestPermissions: true,
+            stale: false,
+            distanceFilter: 1
+          },
+          (location, error) => {
+            if (error) return;
+            if (location) {
+              const speedKmh = calculateSpeed(
+                location.latitude, 
+                location.longitude, 
+                location.time || Date.now(), 
+                location.speed
+              );
+              
+              setTelemetry({
+                lat: location.latitude,
+                lng: location.longitude,
+                speed: speedKmh,
+                accuracy: location.accuracy || 0,
+                status: 'LIVE'
+              });
+              updateFirebaseTelemetry(location.latitude, location.longitude, speedKmh, location.accuracy || 0);
+            }
+          }
+        );
+        
+        if (id) {
+          watchId.current = id;
+        } else {
+          setIsBroadcasting(false);
+        }
+      } catch (err) {
+        setIsBroadcasting(false);
+      }
+    } else {
+      const id = window.navigator.geolocation.watchPosition(
+        (pos) => {
+          const speedKmh = calculateSpeed(
+            pos.coords.latitude, 
+            pos.coords.longitude, 
+            pos.timestamp, 
+            pos.coords.speed
+          );
+
+          setTelemetry({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            speed: speedKmh,
+            accuracy: pos.coords.accuracy,
+            status: 'LIVE'
+          });
+          updateFirebaseTelemetry(pos.coords.latitude, pos.coords.longitude, speedKmh, pos.coords.accuracy);
+        },
+        () => stopBroadcast(),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+      watchId.current = id.toString();
+    }
+  }, [calculateSpeed, updateFirebaseTelemetry, stopBroadcast, toast]);
+
   const updateAuthority = async (val: boolean) => {
     if (!driverData) return;
     setSyncing(true);
@@ -122,122 +291,6 @@ export function DriverDashboard() {
       setSyncing(false);
     });
   };
-
-  const updateFirebaseTelemetry = useCallback((lat: number, lng: number, speedKmh: number, accuracy: number) => {
-    if (user && driverData) {
-      const signalRef = doc(db, 'buses', driverData.busNumber, 'signals', user.uid);
-      const signalData = {
-        uid: user.uid,
-        email: user.email?.toLowerCase(),
-        bus_id: driverData.busNumber,
-        bus_number: driverData.busNumber,
-        location: {
-          latitude: lat,
-          longitude: lng
-        },
-        speed: speedKmh,
-        accuracy: accuracy,
-        timestamp: serverTimestamp()
-      };
-
-      setDoc(signalRef, signalData, { merge: true }).catch(async () => {
-        const permissionError = new FirestorePermissionError({
-          path: signalRef.path,
-          operation: 'write',
-          requestResourceData: signalData
-        });
-        errorEmitter.emit('permission-error', permissionError);
-      });
-    }
-  }, [user, driverData, db]);
-
-  const stopBroadcast = useCallback(async () => {
-    if (watchId.current !== null) {
-      if (Capacitor.isNativePlatform()) {
-        await removeBackgroundWatcher(watchId.current);
-      } else {
-        navigator.geolocation.clearWatch(parseInt(watchId.current));
-      }
-      watchId.current = null;
-    }
-    setIsBroadcasting(false);
-    setTelemetry(prev => ({ ...prev, status: 'OFFLINE' }));
-    cleanupSignal();
-  }, [cleanupSignal]);
-
-  const startBroadcast = useCallback(async () => {
-    const isNative = Capacitor.isNativePlatform();
-    
-    if (isNative) {
-      const status = await requestLocationPermissions();
-      if (status.location !== 'granted') {
-        toast({
-          title: "Location Permission Required",
-          description: "Please enable location access in system settings.",
-          variant: "destructive"
-        });
-        return;
-      }
-    }
-
-    setIsBroadcasting(true);
-    setTelemetry(prev => ({ ...prev, status: 'LIVE' }));
-
-    if (isNative) {
-      try {
-        const id = await addBackgroundWatcher(
-          {
-            backgroundMessage: "WIMCB Driver is broadcasting telemetry in the background.",
-            backgroundTitle: "Fleet Sync Active",
-            requestPermissions: true,
-            stale: false,
-            distanceFilter: 1
-          },
-          (location, error) => {
-            if (error) return;
-            if (location) {
-              const rawSpeed = location.speed ?? 0;
-              const speedKmh = Math.max(0, parseFloat((rawSpeed * 3.6).toFixed(1)));
-              setTelemetry({
-                lat: location.latitude,
-                lng: location.longitude,
-                speed: speedKmh,
-                accuracy: location.accuracy || 0,
-                status: 'LIVE'
-              });
-              updateFirebaseTelemetry(location.latitude, location.longitude, speedKmh, location.accuracy || 0);
-            }
-          }
-        );
-        
-        if (id) {
-          watchId.current = id;
-        } else {
-          setIsBroadcasting(false);
-        }
-      } catch (err) {
-        setIsBroadcasting(false);
-      }
-    } else {
-      const id = window.navigator.geolocation.watchPosition(
-        (pos) => {
-          const rawSpeed = pos.coords.speed ?? 0;
-          const speedKmh = Math.max(0, parseFloat((rawSpeed * 3.6).toFixed(1)));
-          setTelemetry({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            speed: speedKmh,
-            accuracy: pos.coords.accuracy,
-            status: 'LIVE'
-          });
-          updateFirebaseTelemetry(pos.coords.latitude, pos.coords.longitude, speedKmh, pos.coords.accuracy);
-        },
-        () => stopBroadcast(),
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-      watchId.current = id.toString();
-    }
-  }, [updateFirebaseTelemetry, stopBroadcast, toast]);
 
   useEffect(() => {
     return () => {
