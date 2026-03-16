@@ -9,7 +9,9 @@ import type { GeolocationPlugin } from '@capacitor/geolocation';
  * module resolution errors for native Capacitor plugins.
  * This is the correct pattern for NextJS + Capacitor.
  */
+// @ts-ignore
 const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
+// @ts-ignore
 const Geolocation = registerPlugin<GeolocationPlugin>('Geolocation');
 
 export async function addBackgroundWatcher(

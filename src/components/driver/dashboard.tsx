@@ -3,10 +3,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { useFirestore } from '@/firebase';
-import { doc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, serverTimestamp, onSnapshot, updateDoc } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { 
   Radio, 
   MapPin, 
@@ -35,6 +36,7 @@ export function DriverDashboard() {
   
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+  const [busDataLoading, setBusDataLoading] = useState(true);
   const [telemetry, setTelemetry] = useState({
     lat: 0,
     lng: 0,
@@ -48,6 +50,7 @@ export function DriverDashboard() {
   const watchId = useRef<string | null>(null);
   const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
 
+  // Sync Network Status
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -66,19 +69,28 @@ export function DriverDashboard() {
     };
   }, []);
 
+  // Sync Signal Authority Toggle from Firestore
   useEffect(() => {
     if (driverData?.busNumber) {
       const busRef = doc(db, 'buses', driverData.busNumber);
       const unsubscribe = onSnapshot(busRef, (snapshot) => {
         if (snapshot.exists()) {
           setAllowCrowdsourcing(snapshot.data().allow_crowdsourcing ?? true);
+        } else {
+          // Initialize bus doc if missing
+          setDoc(busRef, { 
+            bus_number: driverData.busNumber, 
+            allow_crowdsourcing: true 
+          }, { merge: true });
         }
+        setBusDataLoading(false);
       }, (err) => {
         const permissionError = new FirestorePermissionError({
           path: busRef.path,
           operation: 'get'
         });
         errorEmitter.emit('permission-error', permissionError);
+        setBusDataLoading(false);
       });
       return () => unsubscribe();
     }
@@ -98,43 +110,40 @@ export function DriverDashboard() {
   }, [user, driverData, db]);
 
   const calculateSpeed = useCallback((lat: number, lng: number, timestamp: number, reportedSpeed: number | null) => {
+    let speedKmh = 0;
+
     // 1. Direct Reading: If reported speed exists and is valid (> 0.2 m/s), use it.
     if (reportedSpeed !== null && reportedSpeed > 0.2) {
-      return parseFloat((reportedSpeed * 3.6).toFixed(1));
+      speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
+    } else if (prevPosRef.current) {
+      // 2. Fallback Calculation: Haversine distance over time
+      const prev = prevPosRef.current;
+      const timeDiffSec = (timestamp - prev.timestamp) / 1000;
+
+      // Ensure at least 1 second has passed to filter jitter
+      if (timeDiffSec >= 1) {
+        const R = 6371e3; // Earth radius
+        const dLat = (lat - prev.lat) * Math.PI / 180;
+        const dLon = (lng - prev.lng) * Math.PI / 180;
+        const a = 
+          Math.sin(dLat/2) * Math.sin(dLat/2) +
+          Math.cos(prev.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * 
+          Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const distance = R * c;
+
+        const speedMps = distance / timeDiffSec;
+        speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
+
+        // Smoothing
+        if (speedKmh < 1.5) speedKmh = 0;
+        if (speedKmh > 130) speedKmh = telemetry.speed;
+      } else {
+        speedKmh = telemetry.speed;
+      }
     }
 
-    // 2. Fallback Calculation: Haversine distance over time
-    if (!prevPosRef.current) {
-      prevPosRef.current = { lat, lng, timestamp };
-      return 0;
-    }
-
-    const prev = prevPosRef.current;
-    const timeDiffSec = (timestamp - prev.timestamp) / 1000;
-
-    // Ignore updates that are too close in time to prevent division by zero or extreme outliers
-    if (timeDiffSec < 1) return telemetry.speed;
-
-    // Haversine Formula for distance
-    const R = 6371e3; // Earth radius in metres
-    const dLat = (lat - prev.lat) * Math.PI / 180;
-    const dLon = (lng - prev.lng) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(prev.lat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * 
-      Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    const distance = R * c;
-
-    const speedMps = distance / timeDiffSec;
-    let speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
-
-    // Smoothing: If speed is less than 1.5 km/h, it's likely GPS jitter. Force to 0.
-    if (speedKmh < 1.5) speedKmh = 0;
-    
-    // Safety cap: Prevent impossible speeds from GPS teleportation
-    if (speedKmh > 130) speedKmh = telemetry.speed;
-
+    // ALWAYS update reference for next calculation
     prevPosRef.current = { lat, lng, timestamp };
     return speedKmh;
   }, [telemetry.speed]);
@@ -266,16 +275,16 @@ export function DriverDashboard() {
     }
   }, [calculateSpeed, updateFirebaseTelemetry, stopBroadcast, toast]);
 
+  // Write Signal Authority Control to Firestore
   const updateAuthority = async (val: boolean) => {
     if (!driverData) return;
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busNumber);
     
-    setDoc(busRef, {
+    updateDoc(busRef, {
       allow_crowdsourcing: val,
-      bus_number: driverData.busNumber,
       updated_at: serverTimestamp()
-    }, { merge: true }).then(() => {
+    }).then(() => {
       toast({ 
         title: val ? "Crowdsourcing Restored" : "Exclusive Command Active",
         description: val ? "Student data is now accepted." : "Fleet is now locked to official signals."
@@ -380,11 +389,15 @@ export function DriverDashboard() {
                 <p className="text-xs text-muted-foreground">Force priority over crowdsourced data</p>
               </div>
             </div>
-            <Switch 
-              checked={!allowCrowdsourcing} 
-              onCheckedChange={(checked) => updateAuthority(!checked)}
-              disabled={syncing}
-            />
+            {busDataLoading ? (
+              <Skeleton className="h-6 w-11 rounded-full" />
+            ) : (
+              <Switch 
+                checked={!allowCrowdsourcing} 
+                onCheckedChange={(checked) => updateAuthority(!checked)}
+                disabled={syncing}
+              />
+            )}
           </CardContent>
         </Card>
 
@@ -451,7 +464,7 @@ export function DriverDashboard() {
       </div>
       
       <div className="text-center pb-2 opacity-30 select-none pointer-events-none">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.7 Permissions Optimized</p>
+        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.8 Permissions Optimized</p>
       </div>
     </div>
   );
