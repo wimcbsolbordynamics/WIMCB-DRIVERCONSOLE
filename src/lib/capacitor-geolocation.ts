@@ -7,6 +7,7 @@ import type { GeolocationPlugin, PermissionStatus } from '@capacitor/geolocation
 /**
  * Standard Capacitor plugin registration.
  * This pattern bypasses the dynamic import errors that occur during the Next.js build process.
+ * The registerPlugin function handles the environment check internally.
  */
 const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
 const Geolocation = registerPlugin<GeolocationPlugin>('Geolocation');
@@ -26,7 +27,7 @@ export async function addBackgroundWatcher(
     return null;
   }
   
-  // Directly use the registered plugin
+  // Use the registered plugin directly. This is much more stable than dynamic imports.
   return await BackgroundGeolocation.addWatcher(options, callback);
 }
 
@@ -41,6 +42,7 @@ export async function requestLocationPermissions(): Promise<PermissionStatus> {
   try {
     const status = await Geolocation.checkPermissions();
     
+    // On Android 11+, we need to check both location and background location.
     if (status.location !== 'granted') {
       const request = await Geolocation.requestPermissions();
       return request;

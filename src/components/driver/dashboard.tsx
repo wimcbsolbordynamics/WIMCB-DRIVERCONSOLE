@@ -47,7 +47,7 @@ export function DriverDashboard() {
   const watchId = useRef<string | null>(null);
   const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
   
-  // Latest refs to avoid closure staleness in background callbacks
+  // Ref tracking to avoid closure issues in background callbacks
   const userRef = useRef(user);
   const driverDataRef = useRef(driverData);
   const telemetryRef = useRef(telemetry);
@@ -86,7 +86,7 @@ export function DriverDashboard() {
     };
   }, []);
 
-  // Fetch Bus Authority
+  // Fetch Bus Settings
   useEffect(() => {
     if (driverData?.busId) {
       const busRef = doc(db, 'buses', driverData.busId);
@@ -109,7 +109,7 @@ export function DriverDashboard() {
     if (reportedSpeed !== null && reportedSpeed > 0.1) {
       speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
     } 
-    // 2. Haversine Fallback
+    // 2. Haversine Calculation Fallback
     else if (prevPosRef.current) {
       const prev = prevPosRef.current;
       const timeDiffSec = (timestamp - prev.timestamp) / 1000;
@@ -128,9 +128,9 @@ export function DriverDashboard() {
         const speedMps = distance / timeDiffSec;
         speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
 
-        // Smoothing/Jitter Filtering
+        // Threshold Smoothing
         if (speedKmh < 1.5) speedKmh = 0;
-        if (speedKmh > 140) speedKmh = telemetryRef.current.speed; // Reject impossible jumps
+        if (speedKmh > 140) speedKmh = telemetryRef.current.speed; // Filter outliers
       } else {
         speedKmh = telemetryRef.current.speed;
       }
@@ -183,6 +183,7 @@ export function DriverDashboard() {
   const startBroadcast = async () => {
     if (Capacitor.isNativePlatform()) {
       const status = await requestLocationPermissions();
+      // On Android 13, background location requires manual user interaction
       if (status.location !== 'granted') {
         toast({
           title: "Startup Failed",

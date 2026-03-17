@@ -36,6 +36,7 @@
         </provider>
 
         <!-- Correctly export the background service for the plugin and fix manifest merger conflict -->
+        <!-- android:exported="true" is required for the service to be started by the system/plugin -->
         <service
             android:name="com.equimaps.capacitor_background_geolocation.BackgroundGeolocationService"
             android:enabled="true"
