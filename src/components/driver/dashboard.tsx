@@ -20,7 +20,6 @@ import {
   Bus as BusIcon,
   Wifi,
   WifiOff,
-  CloudLightning,
   Satellite
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
@@ -48,6 +47,7 @@ export function DriverDashboard() {
   const watchId = useRef<string | null>(null);
   const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
   
+  // Latest refs to avoid closure staleness in background callbacks
   const userRef = useRef(user);
   const driverDataRef = useRef(driverData);
   const telemetryRef = useRef(telemetry);
@@ -63,13 +63,13 @@ export function DriverDashboard() {
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       const unsubscribe = onSnapshot(signalRef, (snapshot) => {
-        const active = snapshot.exists();
-        setIsBroadcasting(active);
+        setIsBroadcasting(snapshot.exists());
       });
       return () => unsubscribe();
     }
   }, [user, driverData, db]);
 
+  // Network Status
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -86,6 +86,7 @@ export function DriverDashboard() {
     };
   }, []);
 
+  // Fetch Bus Authority
   useEffect(() => {
     if (driverData?.busId) {
       const busRef = doc(db, 'buses', driverData.busId);
@@ -104,10 +105,12 @@ export function DriverDashboard() {
   const calculateSpeed = useCallback((lat: number, lng: number, timestamp: number, reportedSpeed: number | null) => {
     let speedKmh = 0;
 
-    // Direct sensor reading (m/s to km/h)
+    // 1. Direct sensor reading (m/s to km/h)
     if (reportedSpeed !== null && reportedSpeed > 0.1) {
       speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
-    } else if (prevPosRef.current) {
+    } 
+    // 2. Haversine Fallback
+    else if (prevPosRef.current) {
       const prev = prevPosRef.current;
       const timeDiffSec = (timestamp - prev.timestamp) / 1000;
 
@@ -125,9 +128,9 @@ export function DriverDashboard() {
         const speedMps = distance / timeDiffSec;
         speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
 
-        // Jitter Filtering
-        if (speedKmh < 1.2) speedKmh = 0;
-        if (speedKmh > 130) speedKmh = 0; 
+        // Smoothing/Jitter Filtering
+        if (speedKmh < 1.5) speedKmh = 0;
+        if (speedKmh > 140) speedKmh = telemetryRef.current.speed; // Reject impossible jumps
       } else {
         speedKmh = telemetryRef.current.speed;
       }
@@ -155,7 +158,7 @@ export function DriverDashboard() {
         speed: speed,
         accuracy: accuracy,
         timestamp: serverTimestamp()
-      }, { merge: true }).catch(err => console.error("Sync Error:", err));
+      }, { merge: true }).catch(err => console.error("Firestore Sync Failed:", err));
     }
   }, [db]);
 
@@ -182,8 +185,8 @@ export function DriverDashboard() {
       const status = await requestLocationPermissions();
       if (status.location !== 'granted') {
         toast({
-          title: "Permission Denied",
-          description: "Location must be set to 'Allow all the time' in System Settings.",
+          title: "Startup Failed",
+          description: "Required 'Allow all the time' location access. Please check app settings.",
           variant: "destructive"
         });
         return;
@@ -194,8 +197,8 @@ export function DriverDashboard() {
       if (Capacitor.isNativePlatform()) {
         const id = await addBackgroundWatcher(
           {
-            backgroundMessage: "WIMCB Terminal is broadcasting your position.",
-            backgroundTitle: "Fleet Sync Active",
+            backgroundMessage: "WIMCB Driver Console is broadcasting precision telemetry.",
+            backgroundTitle: "Fleet Link Active",
             requestPermissions: true,
             stale: false,
             distanceFilter: 2
@@ -235,7 +238,7 @@ export function DriverDashboard() {
         watchId.current = id.toString();
       }
     } catch (err) {
-      toast({ title: "Startup Error", description: "Background tracking failed to initialize.", variant: "destructive" });
+      toast({ title: "Module Error", description: "Could not initialize location engine.", variant: "destructive" });
     }
   };
 
@@ -254,11 +257,11 @@ export function DriverDashboard() {
           <div className={`h-2.5 w-2.5 rounded-full ${isBroadcasting ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
           <div className="flex flex-col">
             <span className="text-[10px] font-code font-bold uppercase tracking-widest opacity-80">
-              System: {isBroadcasting ? 'ACTIVE' : 'IDLE'}
+              Uplink: {isBroadcasting ? 'CONNECTED' : 'DISCONNECTED'}
             </span>
             <div className={`flex items-center gap-1 text-[9px] font-bold uppercase tracking-tighter ${isOnline ? 'text-green-400' : 'text-destructive'}`}>
               {isOnline ? <Wifi className="h-2 w-2" /> : <WifiOff className="h-2 w-2" />}
-              {isOnline ? 'Network: Online' : 'Network: Offline'}
+              {isOnline ? 'System: Online' : 'System: Offline'}
             </div>
           </div>
         </div>
@@ -271,7 +274,7 @@ export function DriverDashboard() {
         <Card className="bg-destructive/10 border-destructive/50">
           <CardContent className="p-3 flex items-center gap-3 text-destructive">
             <WifiOff className="h-5 w-5 shrink-0" />
-            <p className="text-xs font-bold leading-tight uppercase tracking-tight">Sync Offline: Check network.</p>
+            <p className="text-xs font-bold leading-tight uppercase tracking-tight">Sync Paused: Network connection lost.</p>
           </CardContent>
         </Card>
       )}
@@ -280,7 +283,7 @@ export function DriverDashboard() {
         <Card className="bg-amber-500/10 border-amber-500/50">
           <CardContent className="p-3 flex items-center gap-3 text-amber-500">
             <Satellite className="h-5 w-5 shrink-0" />
-            <p className="text-[10px] font-bold uppercase">Low GPS Accuracy (±{telemetry.accuracy.toFixed(0)}m)</p>
+            <p className="text-[10px] font-bold uppercase">Low Signal Precision (±{telemetry.accuracy.toFixed(0)}m)</p>
           </CardContent>
         </Card>
       )}
@@ -304,7 +307,7 @@ export function DriverDashboard() {
               {allowCrowdsourcing ? <Users className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
             </div>
             <div className="space-y-0.5">
-              <p className="text-sm font-semibold text-white">Exclusive Control</p>
+              <p className="text-sm font-semibold text-white">Exclusive Command</p>
               <p className="text-xs text-muted-foreground">Force official signal priority</p>
             </div>
           </div>
