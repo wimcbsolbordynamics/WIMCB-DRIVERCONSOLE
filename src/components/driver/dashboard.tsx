@@ -21,12 +21,9 @@ import {
   Wifi,
   WifiOff,
   CloudLightning,
-  Satellite,
-  AlertTriangle
+  Satellite
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { errorEmitter } from '@/firebase/error-emitter';
-import { FirestorePermissionError } from '@/firebase/errors';
 import { Capacitor } from '@capacitor/core';
 import { addBackgroundWatcher, removeBackgroundWatcher, requestLocationPermissions } from '@/lib/capacitor-geolocation';
 
@@ -68,10 +65,6 @@ export function DriverDashboard() {
       const unsubscribe = onSnapshot(signalRef, (snapshot) => {
         const active = snapshot.exists();
         setIsBroadcasting(active);
-        if (!active && watchId.current) {
-          // If Firestore document is deleted but local watcher is still running, stop it
-          stopBroadcastLocally();
-        }
       });
       return () => unsubscribe();
     }
@@ -101,7 +94,7 @@ export function DriverDashboard() {
           setAllowCrowdsourcing(snapshot.data().allow_crowdsourcing ?? true);
         }
         setBusDataLoading(false);
-      }, (err) => {
+      }, () => {
         setBusDataLoading(false);
       });
       return () => unsubscribe();
@@ -115,7 +108,6 @@ export function DriverDashboard() {
     if (reportedSpeed !== null && reportedSpeed > 0.1) {
       speedKmh = parseFloat((reportedSpeed * 3.6).toFixed(1));
     } else if (prevPosRef.current) {
-      // Manual fallback calculation
       const prev = prevPosRef.current;
       const timeDiffSec = (timestamp - prev.timestamp) / 1000;
 
@@ -133,7 +125,7 @@ export function DriverDashboard() {
         const speedMps = distance / timeDiffSec;
         speedKmh = parseFloat((speedMps * 3.6).toFixed(1));
 
-        // Jitter Filtering: Ignore small drift while stationary
+        // Jitter Filtering
         if (speedKmh < 1.2) speedKmh = 0;
         if (speedKmh > 130) speedKmh = 0; 
       } else {
@@ -151,7 +143,7 @@ export function DriverDashboard() {
     
     if (u && d?.busId) {
       const signalRef = doc(db, 'buses', d.busId, 'signals', u.uid);
-      const signalData = {
+      setDoc(signalRef, {
         uid: u.uid,
         email: u.email?.toLowerCase(),
         bus_id: d.busId,
@@ -163,15 +155,11 @@ export function DriverDashboard() {
         speed: speed,
         accuracy: accuracy,
         timestamp: serverTimestamp()
-      };
-
-      setDoc(signalRef, signalData, { merge: true }).catch((err) => {
-        console.error("Telemetry sync failed:", err);
-      });
+      }, { merge: true }).catch(err => console.error("Sync Error:", err));
     }
   }, [db]);
 
-  const stopBroadcastLocally = async () => {
+  const stopBroadcast = async () => {
     if (watchId.current !== null) {
       if (Capacitor.isNativePlatform()) {
         await removeBackgroundWatcher(watchId.current);
@@ -182,10 +170,7 @@ export function DriverDashboard() {
     }
     prevPosRef.current = null;
     setTelemetry(prev => ({ ...prev, status: 'OFFLINE', speed: 0 }));
-  };
 
-  const stopBroadcast = async () => {
-    await stopBroadcastLocally();
     if (user && driverData?.busId) {
       const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
       await deleteDoc(signalRef);
@@ -193,102 +178,64 @@ export function DriverDashboard() {
   };
 
   const startBroadcast = async () => {
-    const isNative = Capacitor.isNativePlatform();
-    
-    if (isNative) {
+    if (Capacitor.isNativePlatform()) {
       const status = await requestLocationPermissions();
       if (status.location !== 'granted') {
         toast({
-          title: "Permission Required",
-          description: "Location must be set to 'Allow all the time' in System Settings for background sync.",
+          title: "Permission Denied",
+          description: "Location must be set to 'Allow all the time' in System Settings.",
           variant: "destructive"
         });
         return;
       }
     }
 
-    // Initialize the Firestore document to signal "LIVE" status to the Tracker
-    if (user && driverData?.busId) {
-      const signalRef = doc(db, 'buses', driverData.busId, 'signals', user.uid);
-      await setDoc(signalRef, {
-        uid: user.uid,
-        email: user.email?.toLowerCase(),
-        bus_id: driverData.busId,
-        bus_number: driverData.busNumber,
-        location: { latitude: telemetry.lat, longitude: telemetry.lng },
-        speed: 0,
-        accuracy: 0,
-        timestamp: serverTimestamp()
-      }, { merge: true });
-    }
-
-    if (isNative) {
-      try {
+    try {
+      if (Capacitor.isNativePlatform()) {
         const id = await addBackgroundWatcher(
           {
-            backgroundMessage: "Fleet Sync is broadcasting precision telemetry.",
-            backgroundTitle: "WIMCB Command Active",
+            backgroundMessage: "WIMCB Terminal is broadcasting your position.",
+            backgroundTitle: "Fleet Sync Active",
             requestPermissions: true,
             stale: false,
             distanceFilter: 2
           },
           (location, error) => {
-            if (error) {
-              console.error("Watcher Error:", error);
-              return;
-            }
+            if (error) return;
             if (location) {
-              const speedKmh = calculateSpeed(
-                location.latitude, 
-                location.longitude, 
-                location.time || Date.now(), 
-                location.speed
-              );
-              
+              const speed = calculateSpeed(location.latitude, location.longitude, location.time || Date.now(), location.speed);
               setTelemetry({
                 lat: location.latitude,
                 lng: location.longitude,
-                speed: speedKmh,
+                speed: speed,
                 accuracy: location.accuracy || 0,
                 status: 'LIVE'
               });
-              updateFirebaseTelemetry(location.latitude, location.longitude, speedKmh, location.accuracy || 0);
+              updateFirebaseTelemetry(location.latitude, location.longitude, speed, location.accuracy || 0);
             }
           }
         );
         watchId.current = id;
-      } catch (err) {
-        console.error("Startup Failure:", err);
-        toast({
-          title: "Startup Failed",
-          description: "Ensure 'Allow all the time' location permission is enabled in app info.",
-          variant: "destructive"
-        });
-        stopBroadcast();
+      } else {
+        const id = navigator.geolocation.watchPosition(
+          (pos) => {
+            const speed = calculateSpeed(pos.coords.latitude, pos.coords.longitude, pos.timestamp, pos.coords.speed);
+            setTelemetry({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              speed: speed,
+              accuracy: pos.coords.accuracy,
+              status: 'LIVE'
+            });
+            updateFirebaseTelemetry(pos.coords.latitude, pos.coords.longitude, speed, pos.coords.accuracy);
+          },
+          () => stopBroadcast(),
+          { enableHighAccuracy: true, timeout: 15000 }
+        );
+        watchId.current = id.toString();
       }
-    } else {
-      const id = window.navigator.geolocation.watchPosition(
-        (pos) => {
-          const speedKmh = calculateSpeed(
-            pos.coords.latitude, 
-            pos.coords.longitude, 
-            pos.timestamp, 
-            pos.coords.speed
-          );
-
-          setTelemetry({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            speed: speedKmh,
-            accuracy: pos.coords.accuracy,
-            status: 'LIVE'
-          });
-          updateFirebaseTelemetry(pos.coords.latitude, pos.coords.longitude, speedKmh, pos.coords.accuracy);
-        },
-        () => stopBroadcast(),
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-      watchId.current = id.toString();
+    } catch (err) {
+      toast({ title: "Startup Error", description: "Background tracking failed to initialize.", variant: "destructive" });
     }
   };
 
@@ -296,16 +243,8 @@ export function DriverDashboard() {
     if (!driverData?.busId) return;
     setSyncing(true);
     const busRef = doc(db, 'buses', driverData.busId);
-    
-    updateDoc(busRef, {
-      allow_crowdsourcing: val,
-      updated_at: serverTimestamp()
-    }).then(() => {
-      toast({ 
-        title: val ? "Crowdsourcing Restored" : "Exclusive Command Active",
-        description: val ? "Student data is now accepted." : "Fleet is now locked to official signals."
-      });
-    }).finally(() => setSyncing(false));
+    updateDoc(busRef, { allow_crowdsourcing: val, updated_at: serverTimestamp() })
+      .finally(() => setSyncing(false));
   };
 
   return (
@@ -323,26 +262,16 @@ export function DriverDashboard() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {isBroadcasting && (
-            <div className={`flex items-center gap-1 text-[10px] font-bold mr-2 ${isOnline ? 'text-primary' : 'text-destructive'}`}>
-              <CloudLightning className="h-3 w-3" />
-              <span>{isOnline ? 'CLOUD SYNC' : 'SYNC FAILED'}</span>
-            </div>
-          )}
-          <Button variant="ghost" size="icon" onClick={() => logout()} className="text-muted-foreground hover:text-white">
-            <LogOut className="h-5 w-5" />
-          </Button>
-        </div>
+        <Button variant="ghost" size="icon" onClick={() => logout()} className="text-muted-foreground hover:text-white">
+          <LogOut className="h-5 w-5" />
+        </Button>
       </div>
 
       {!isOnline && (
-        <Card className="bg-destructive/10 border-destructive/50 animate-pulse">
+        <Card className="bg-destructive/10 border-destructive/50">
           <CardContent className="p-3 flex items-center gap-3 text-destructive">
             <WifiOff className="h-5 w-5 shrink-0" />
-            <p className="text-xs font-bold leading-tight uppercase tracking-tight">
-              INTERNET LOST. Move to high-signal area.
-            </p>
+            <p className="text-xs font-bold leading-tight uppercase tracking-tight">Sync Offline: Check network.</p>
           </CardContent>
         </Card>
       )}
@@ -350,98 +279,82 @@ export function DriverDashboard() {
       {telemetry.accuracy > 50 && isBroadcasting && (
         <Card className="bg-amber-500/10 border-amber-500/50">
           <CardContent className="p-3 flex items-center gap-3 text-amber-500">
-            <Satellite className="h-5 w-5 shrink-0 animate-bounce" />
-            <div className="flex flex-col">
-              <p className="text-xs font-bold leading-tight uppercase">Low GPS Precision</p>
-              <p className="text-[10px] opacity-80 font-semibold tracking-tight">Accuracy: ±{telemetry.accuracy.toFixed(0)}m. Speed may be throttled.</p>
-            </div>
+            <Satellite className="h-5 w-5 shrink-0" />
+            <p className="text-[10px] font-bold uppercase">Low GPS Accuracy (±{telemetry.accuracy.toFixed(0)}m)</p>
           </CardContent>
         </Card>
       )}
 
-      <Card className="command-card overflow-hidden">
-        <CardContent className="p-6">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <h2 className="text-3xl font-bold tracking-tight text-white">BUS {driverData?.busNumber}</h2>
-              <p className="text-sm text-muted-foreground font-code">{user?.email}</p>
-            </div>
-            <div className="h-12 w-12 rounded-xl bg-primary/20 flex items-center justify-center text-primary border border-primary/30">
-              <BusIcon className="h-7 w-7" />
-            </div>
+      <Card className="command-card">
+        <CardContent className="p-6 flex items-start justify-between">
+          <div className="space-y-1">
+            <h2 className="text-3xl font-bold tracking-tight text-white">BUS {driverData?.busNumber}</h2>
+            <p className="text-sm text-muted-foreground font-code">{user?.email}</p>
+          </div>
+          <div className="h-12 w-12 rounded-xl bg-primary/20 flex items-center justify-center text-primary border border-primary/30">
+            <BusIcon className="h-7 w-7" />
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4">
-        <Card className="command-card">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className={`p-2 rounded-lg ${allowCrowdsourcing ? 'bg-muted' : 'bg-primary/20 text-primary border border-primary/30'}`}>
-                {allowCrowdsourcing ? <Users className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
-              </div>
-              <div className="space-y-0.5">
-                <p className="text-sm font-semibold text-white">Exclusive Command</p>
-                <p className="text-xs text-muted-foreground">Force official signal priority</p>
-              </div>
+      <Card className="command-card">
+        <CardContent className="p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-lg ${allowCrowdsourcing ? 'bg-muted' : 'bg-primary/20 text-primary border border-primary/30'}`}>
+              {allowCrowdsourcing ? <Users className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
             </div>
-            {busDataLoading ? (
-              <Skeleton className="h-6 w-11 rounded-full" />
-            ) : (
-              <Switch 
-                checked={!allowCrowdsourcing} 
-                onCheckedChange={(checked) => updateAuthority(!checked)}
-                disabled={syncing}
-              />
-            )}
+            <div className="space-y-0.5">
+              <p className="text-sm font-semibold text-white">Exclusive Control</p>
+              <p className="text-xs text-muted-foreground">Force official signal priority</p>
+            </div>
+          </div>
+          {busDataLoading ? <Skeleton className="h-6 w-11 rounded-full" /> : (
+            <Switch checked={!allowCrowdsourcing} onCheckedChange={(v) => updateAuthority(!v)} disabled={syncing} />
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-2 gap-4">
+        <Card className="command-card">
+          <CardContent className="p-4 flex flex-col items-center justify-center space-y-2">
+            <Navigation className="h-5 w-5 text-primary opacity-70" />
+            <div className="text-center">
+              <p className="text-3xl font-code font-bold text-white leading-none">{telemetry.speed}</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">KM/H</p>
+            </div>
           </CardContent>
         </Card>
-
-        <div className="grid grid-cols-2 gap-4">
-          <Card className="command-card">
-            <CardContent className="p-4 flex flex-col items-center justify-center space-y-2">
-              <Navigation className="h-5 w-5 text-primary opacity-70" />
-              <div className="text-center">
-                <p className="text-3xl font-code font-bold text-white leading-none">{telemetry.speed}</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">KM/H</p>
-              </div>
-            </CardContent>
-          </Card>
-          
-          <Card className="command-card">
-            <CardContent className="p-4 flex flex-col items-center justify-center space-y-2">
-              <Zap className="h-5 w-5 text-amber-500 opacity-70" />
-              <div className="text-center">
-                <p className="text-3xl font-code font-bold text-white leading-none">{telemetry.accuracy > 0 ? telemetry.accuracy.toFixed(0) : '---'}</p>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">ACCURACY (M)</p>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
         <Card className="command-card">
-          <CardContent className="p-4 space-y-2">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <MapPin className="h-4 w-4" />
-              <span className="text-xs font-code font-bold uppercase">Satellite Fix</span>
-            </div>
-            <div className="bg-background/50 rounded-lg p-3 font-code text-[11px] text-primary flex justify-between">
-              <span>LAT: {telemetry.lat ? telemetry.lat.toFixed(6) : '0.000000'}</span>
-              <span className="opacity-30">|</span>
-              <span>LNG: {telemetry.lng ? telemetry.lng.toFixed(6) : '0.000000'}</span>
+          <CardContent className="p-4 flex flex-col items-center justify-center space-y-2">
+            <Zap className="h-5 w-5 text-amber-500 opacity-70" />
+            <div className="text-center">
+              <p className="text-3xl font-code font-bold text-white leading-none">{telemetry.accuracy > 0 ? telemetry.accuracy.toFixed(0) : '---'}</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">ACCURACY (M)</p>
             </div>
           </CardContent>
         </Card>
       </div>
+
+      <Card className="command-card">
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <MapPin className="h-4 w-4" />
+            <span className="text-xs font-code font-bold uppercase tracking-widest">Satellite Link</span>
+          </div>
+          <div className="bg-background/50 rounded-lg p-3 font-code text-[11px] text-primary flex justify-between">
+            <span>LAT: {telemetry.lat.toFixed(6)}</span>
+            <span className="opacity-30">|</span>
+            <span>LNG: {telemetry.lng.toFixed(6)}</span>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="flex-1" />
 
       <div className="pb-6">
         <Button 
           className={`w-full h-24 text-2xl font-black rounded-2xl transition-all duration-300 transform active:scale-95 shadow-2xl uppercase tracking-tighter ${
-            isBroadcasting 
-            ? 'bg-destructive hover:bg-destructive/90 text-white' 
-            : 'bg-primary hover:bg-primary/90 text-white'
+            isBroadcasting ? 'bg-destructive hover:bg-destructive/90' : 'bg-primary hover:bg-primary/90'
           }`}
           onClick={isBroadcasting ? stopBroadcast : startBroadcast}
         >
@@ -457,10 +370,6 @@ export function DriverDashboard() {
             </div>
           )}
         </Button>
-      </div>
-      
-      <div className="text-center pb-2 opacity-30">
-        <p className="text-[10px] font-code uppercase tracking-[0.2em] font-bold">Fleet Terminal v2.9 Permissions Optimized</p>
       </div>
     </div>
   );

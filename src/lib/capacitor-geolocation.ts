@@ -4,6 +4,7 @@ import { registerPlugin, Capacitor } from '@capacitor/core';
 import type { BackgroundGeolocationPlugin } from '@capacitor-community/background-geolocation';
 import type { GeolocationPlugin, PermissionStatus } from '@capacitor/geolocation';
 
+// Using registerPlugin avoids dynamic import type errors during Next.js build
 const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
 const Geolocation = registerPlugin<GeolocationPlugin>('Geolocation');
 
@@ -32,7 +33,7 @@ export async function requestLocationPermissions(): Promise<PermissionStatus> {
   try {
     const status = await Geolocation.checkPermissions();
     
-    // On Android, we need to explicitly request the permissions if they aren't 'granted'
+    // On modern Android, background permission is requested via 'location'
     if (status.location !== 'granted') {
       return await Geolocation.requestPermissions();
     }
