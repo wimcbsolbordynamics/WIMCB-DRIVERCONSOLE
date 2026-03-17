@@ -35,7 +35,7 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
-        <!-- Correctly export the background service for the plugin -->
+        <!-- Correctly export the background service for the plugin and fix manifest merger conflict -->
         <service
             android:name="com.equimaps.capacitor_background_geolocation.BackgroundGeolocationService"
             android:enabled="true"
