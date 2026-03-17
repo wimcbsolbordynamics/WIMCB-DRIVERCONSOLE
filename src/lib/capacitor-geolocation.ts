@@ -5,6 +5,7 @@ import type { BackgroundGeolocationPlugin } from '@capacitor-community/backgroun
 import type { GeolocationPlugin, PermissionStatus } from '@capacitor/geolocation';
 
 // Using registerPlugin avoids dynamic import type errors during Next.js build
+// This is the standard Capacitor pattern for referencing plugins.
 const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation');
 const Geolocation = registerPlugin<GeolocationPlugin>('Geolocation');
 
